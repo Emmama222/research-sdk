@@ -13,6 +13,7 @@ from multiprocessing import Event
 
 #logging
 import logging
+from research_sdk.config import MULTICAST_INTERFACE_IP
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
@@ -118,14 +119,8 @@ class SSL_Multicast(Receiver):
     
     @staticmethod
     def _get_vision_ip() -> str:
-        # """Get vision network interface IP from ipconfig.yaml, fallback 0.0.0.0 (all interfaces)."""
-        # try:
-            from research_sdk.utils.yaml_config import Config
-            cfg = Config()
-            return cfg.vision_ip
-        # except Exception:
-        #     return "0.0.0.0"
-        #     return "0.0.0.0"
+        """Return the YAML-configured interface used for SSL multicast."""
+        return MULTICAST_INTERFACE_IP
 
     def _add_group(self):
         """Joins multicast group, trying the configured interface then falling back to INADDR_ANY."""

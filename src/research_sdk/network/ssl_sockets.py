@@ -1,9 +1,23 @@
 from research_sdk.network.proto2 import ssl_vision_wrapper_pb2,ssl_vision_wrapper_tracked_pb2,ssl_gc_referee_message_pb2,grSim_Packet_pb2
 from research_sdk.network.receiver import SSL_Multicast
 from research_sdk.network.sender import LockedSender
-from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.grSimPacketFactory import grSimPacketFactory
 from multiprocessing import Event
+from typing import TYPE_CHECKING
+from research_sdk.config import (
+    GRSIM_COMMAND_IP,
+    GRSIM_COMMAND_PORT,
+    GRSIM_VISION_PORT,
+    SSL_GAME_CONTROLLER_MULTICAST_GROUP,
+    SSL_GAME_CONTROLLER_PORT,
+    SSL_VISION_MULTICAST_GROUP,
+    SSL_VISION_PORT,
+    SSL_VISION_TRACKER_MULTICAST_GROUP,
+    SSL_VISION_TRACKER_PORT,
+)
+
+if TYPE_CHECKING:
+    from research_sdk.network.robot_command import RobotCommand
 
 # Classes of Vision Wolrd Receivers
 class Vision(SSL_Multicast):
@@ -12,7 +26,12 @@ class Vision(SSL_Multicast):
     Args:
         Multicast (Class): base Class
     """
-    def __init__(self,is_running:Event,port : int=10006) -> None:
+    def __init__(
+        self,
+        is_running: Event,
+        port: int = SSL_VISION_PORT,
+        group: str = SSL_VISION_MULTICAST_GROUP,
+    ) -> None:
         """
         Initialising Multicast Vision SSL Socket
 
@@ -21,7 +40,6 @@ class Vision(SSL_Multicast):
             port (int, optional): Port for Vision World multicast. Defaults to 10005. change accordingly if needed
         """
         decoder :object = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
-        group : str = "224.5.23.2"
         buffer_size : int = 6000
         super().__init__(is_running=is_running,port=port,group=group,decoder=decoder,buffer_size=buffer_size)
    
@@ -35,19 +53,26 @@ class VisionTracker(SSL_Multicast):
     Args:
         Multicast: the recv socket
     """
-    def __init__(self, is_running:Event, port=10010 ):
+    def __init__(
+        self,
+        is_running: Event,
+        port: int = SSL_VISION_TRACKER_PORT,
+        group: str = SSL_VISION_TRACKER_MULTICAST_GROUP,
+    ) -> None:
         
         decoder = ssl_vision_wrapper_tracked_pb2.TrackerWrapperPacket()
-        group : str = "224.5.23.2"
         buffer_size : int = 6000
         super().__init__(is_running=is_running,port=port, group=group, decoder=decoder,
                          buffer_size=buffer_size, timeout=1)
 
 
 class GameControl(SSL_Multicast):
-    def __init__(self,is_running:Event) -> None:
-        group : str = '224.5.23.1'
-        port : int = 10003
+    def __init__(
+        self,
+        is_running: Event,
+        port: int = SSL_GAME_CONTROLLER_PORT,
+        group: str = SSL_GAME_CONTROLLER_MULTICAST_GROUP,
+    ) -> None:
         decoder = ssl_gc_referee_message_pb2.Referee()
         buffer_size : int = 6000
         timeout : float = 5.0
@@ -58,7 +83,7 @@ class GameControl(SSL_Multicast):
         return super().listen()
 
 class grSimVision(Vision):
-    def __init__(self, is_running:Event, port : int=10020) -> None:
+    def __init__(self, is_running: Event, port: int = GRSIM_VISION_PORT) -> None:
         """
         Initialising Multicast GR Sim World Socket
         
@@ -72,12 +97,17 @@ class grSimVision(Vision):
 ### Simulation Control ### 
 
 class grSimSender(LockedSender):
-    def __init__(self, ip: str = "127.0.0.1", port : int = 20010) -> None: #please check and verify this port
+    def __init__(
+        self,
+        ip: str = GRSIM_COMMAND_IP,
+        port: int = GRSIM_COMMAND_PORT,
+    ) -> None:
         super().__init__(ip=ip,port=port)
     
-    def send_robot_command(self,robot_command:RobotCommand,override_id=None):
-        if not isinstance(robot_command,RobotCommand):
-            raise TypeError("Expecting RobotCommand Object, got ", type(robot_command))
+    def send_robot_command(self, robot_command: "RobotCommand", override_id=None):
+        required = ("robot_id", "vx", "vy", "w", "kick", "dribble", "isYellow")
+        if not all(hasattr(robot_command, attribute) for attribute in required):
+            raise TypeError(f"Expected a robot command, got {type(robot_command)!r}")
         # creates a packet
         packet = grSimPacketFactory.robot_command(
             robot_id=int(override_id) if override_id is not None else robot_command.robot_id,

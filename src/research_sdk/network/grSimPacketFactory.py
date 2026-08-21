@@ -1,16 +1,15 @@
 from research_sdk.network.proto2 import grSim_Commands_pb2,grSim_Packet_pb2,grSim_Replacement_pb2
-from research_sdk.network.robot_command import RobotCommand
-
 from typing import Optional
 
 import time
+from research_sdk.config import ROBOT_CHIP_KICK_SPEED_MPS, ROBOT_FLAT_KICK_SPEED_MPS
 
 class grSimPacketFactory():
     ## responsibility of class : generate grSim packet with data provided
     
     # class constants : 
-    KICK_SPEED_X = 4.0
-    KICK_SPEED_Z = 0.0 # chip kick
+    KICK_SPEED_X = ROBOT_FLAT_KICK_SPEED_MPS
+    KICK_SPEED_Z = ROBOT_CHIP_KICK_SPEED_MPS
     
     
     @classmethod
@@ -45,6 +44,27 @@ class grSimPacketFactory():
         packet = cls._grSim_packet_wrapper(replacement=replacement)
         # returns the packet
         return packet
+
+    @classmethod
+    def scenario_replacement_command(cls, robots) -> grSim_Packet_pb2.grSim_Packet:
+        """Build one replacement packet for every robot in a scenario.
+
+        Coordinates must already be converted to grSim metres by the caller.
+        """
+        replacements = [
+            cls._grSim_RobotReplacement_wrapper(
+                robot["x"],
+                robot["y"],
+                robot.get("orientation", 0.0),
+                robot["robot_id"],
+                robot["isYellow"],
+            )
+            for robot in robots
+        ]
+        if not replacements:
+            raise ValueError("A scenario replacement requires at least one robot")
+        replacement = cls._grSim_Replacement_wrapper(robots=replacements)
+        return cls._grSim_packet_wrapper(replacement=replacement)
         
     @classmethod
     def ball_replacement_command(cls,x:float,y:float,
@@ -169,6 +189,8 @@ class grSimPacketFactory():
 
 
 if __name__ == "__main__":
+    from research_sdk.network.robot_command import RobotCommand
+
     ball_replacement = grSimPacketFactory.ball_replacement_command(x=0,y=0,vx=1)
     print(ball_replacement)
     
