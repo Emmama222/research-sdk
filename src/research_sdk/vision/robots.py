@@ -1,5 +1,3 @@
-from research_sdk.voronoi_planner.obstacle import Obstacle
-
 import numpy as np
 
 
@@ -19,7 +17,7 @@ class Robot:
         h (float): height of robot.
     """
     __slots__ = ('isYellow', 'id', 'confidence', 'x', 'y', 'o', 'px', 'py', 'h',
-                 '_position', '_xy_pos', '_obstacle')
+                 '_position', '_xy_pos')
 
     def __init__(self,robot_data,isYellow:bool) -> object:
         self.isYellow : bool = isYellow
@@ -33,7 +31,6 @@ class Robot:
         self.h : float = robot_data.height
         self._position = None
         self._xy_pos = None
-        self._obstacle = None
 
     @property
     def position(self) -> np.dtype:
@@ -62,32 +59,11 @@ class Robot:
     # def __lt__(self,other):
     #     return self.id < other.id
 
-    @property
-    def obstacle(self) -> Obstacle: # To Rafael: Change Value if needed
-        """
-        Returns a Voronoi-compatible obstacle representation of this robot.
-
-        Returns:
-            Obstacle: Circular obstacle for collision planning.
-        """
-        # buffer = 250
-        # top_left= [self.x-buffer, self.y+buffer]
-        # bottom_right= [self.x+buffer, self.y-buffer]
-        # return Obstacle(top_left, bottom_right)
-
-        if self._obstacle is None:
-            self._obstacle = Obstacle(point=(self.x,self.y),
-                            radius=180,
-                            unum=self.id,
-                            isYellow=self.isYellow)
-        return self._obstacle
-
     def __repr__(self):
         color = 'Yellow' if self.isYellow else 'Blue'
         return (
         f"Team: {color}, Robot ID: {self.id}, Confidence: {self.confidence:.2f}\n"
-        f"Position: {self.position} | Pixel: ({self.px}, {self.py})\n"
-        f"Obstacle: {self.obstacle}"
+        f"Position: {self.position} | Pixel: ({self.px}, {self.py})"
     )
 
 
