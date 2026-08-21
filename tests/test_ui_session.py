@@ -37,6 +37,50 @@ def test_scenario_json_round_trip(tmp_path) -> None:
     assert loaded == scenario
 
 
+def test_setting_same_team_robot_moves_instead_of_duplicating() -> None:
+    scenario = Scenario("move robot")
+
+    first_index = scenario.set_robot(
+        ScenarioRobot(1, True, (-1000.0, 0.0), (1000.0, 0.0))
+    )
+    moved_index = scenario.set_robot(
+        ScenarioRobot(1, True, (-500.0, 250.0), (1000.0, 0.0))
+    )
+    scenario.set_robot(ScenarioRobot(1, False, (0.0, 0.0), (0.0, 0.0)))
+
+    assert first_index == moved_index == 0
+    assert len(scenario.robots) == 2
+    assert scenario.robots[0].start_mm == (-500.0, 250.0)
+
+
+def test_robot_and_grsim_obstacle_cannot_share_team_identity() -> None:
+    scenario = Scenario(
+        "unique identities",
+        robots=[ScenarioRobot(3, False, (0.0, 0.0), (100.0, 0.0))],
+    )
+
+    scenario.set_obstacle(ScenarioObstacle(3, False, (200.0, 0.0), 90.0))
+    assert scenario.robots == []
+    assert len(scenario.obstacles) == 1
+
+    scenario.set_robot(ScenarioRobot(3, False, (300.0, 0.0), (400.0, 0.0)))
+    assert scenario.obstacles == []
+    assert len(scenario.robots) == 1
+
+
+def test_clear_obstacles_does_not_remove_planned_robots() -> None:
+    scenario = Scenario(
+        "clear obstacles",
+        robots=[ScenarioRobot(1, True, (0.0, 0.0), (100.0, 0.0))],
+        obstacles=[ScenarioObstacle(2, False, (200.0, 0.0), 90.0)],
+    )
+
+    scenario.clear_obstacles()
+
+    assert scenario.obstacles == []
+    assert len(scenario.robots) == 1
+
+
 def test_session_control_lifecycle_and_guards() -> None:
     session = SessionController()
     assert session.state is SessionState.AFTER_RESET
