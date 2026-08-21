@@ -1,11 +1,10 @@
 # typings
 from multiprocessing import Queue,Process,Event
-from research_sdk.SSL.vision.field import GeometryData
-from research_sdk.SSL.vision.frame import Frame
+from research_sdk.vision.field import GeometryData
+from research_sdk.vision.frame import Frame
 from research_sdk.world.model import WorldModel
-from research_sdk.utils.Logger import LogSaver
 from research_sdk.process_workers.worker import BaseWorker
-from research_sdk.onboard_vision import parse_packet
+# from research_sdk.onboard_vision import parse_packet
 import time
 
 
@@ -57,59 +56,6 @@ class WMWorker(BaseWorker):
                 self.logger.info("[wmr] : Updating World Model Geometry")
                 self.wm.update_geometry(item)
 
-        drained_gc = 0
-        while not self.gc_q.empty() and drained_gc < 32:
-            new_info = self.gc_q.get_nowait()
-            drained_gc += 1
-            self.logger.info(f"[wmr] : Updating World Model Game Info {new_info[0]}")
-            self.wm.update_gc_data(new_info)
-            from research_sdk.SSL.game_controller.common import PacketType
-            if new_info[0] == PacketType.NEW_STATE:
-                print(f"[wmr] → new game state: {new_info[1]}", flush=True)
-            self.wm.update_gc_data(new_info)
-
-        if self.recv_q is not None:
-            drained = 0
-            while drained < 32:
-                try:
-                    data, addr = self.recv_q.get_nowait()
-                except Exception:
-                    break
-                drained += 1
-                obs = parse_packet(data)
-                if obs is None:
-                    self._onboard_rejected += 1
-                    self.logger.warning(
-                        f"[wmr] onboard: parse_packet returned None "
-                        f"from {addr} len={len(data)} "
-                        f"head={data[:60]!r}")
-                    continue
-                obs.recv_ts = time.time()
-                if obs.robot_id < 0 and addr:
-                    m = self.ip_map.get(addr[0])
-                    if m is not None:
-                        obs.is_yellow = bool(m[0])
-                        obs.robot_id = int(m[1])
-                if obs.robot_id < 0:
-                    self._onboard_rejected += 1
-                    self.logger.warning(
-                        f"[wmr] onboard: no robot_id for {addr} "
-                        f"(ip_map has {len(self.ip_map)} entries)")
-                    continue
-                self.wm.put_onboard_obs(obs)
-                self._onboard_ingested += 1
-
-            now = time.time()
-            if drained and (now - self._last_onboard_log) > 2.0:
-                self._last_onboard_log = now
-                msg = (f"[wmr] onboard totals: ingested="
-                       f"{self._onboard_ingested} "
-                       f"rejected={self._onboard_rejected}")
-                self.logger.info(msg)
-                print(msg, flush=True)
-
-        time.sleep(self.delay_time)
-    
     def run(self):
         return super().run()   
     
