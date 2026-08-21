@@ -127,7 +127,7 @@ class grSimPacketFactory():
             "dir": float(orientation),
             "id": int(robot_id),
             "yellowteam": bool(isYellow),
-            # "turnon" : True
+            "turnon": True,
         }
         
         return grSim_Replacement_pb2.grSim_RobotReplacement(**fields)
