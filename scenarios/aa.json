@@ -1,0 +1,125 @@
+{
+  "name": "aa",
+  "robots": [
+    {
+      "robot_id": 0,
+      "is_yellow": true,
+      "start_mm": [
+        3417.3754556500608,
+        1055.2855407047389
+      ],
+      "target_mm": [
+        3149.453219927096,
+        1935.6014580801946
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 2,
+      "is_yellow": true,
+      "start_mm": [
+        3226.0024301336575,
+        -639.7326852976914
+      ],
+      "target_mm": [
+        3226.0024301336575,
+        -639.7326852976914
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 3,
+      "is_yellow": true,
+      "start_mm": [
+        2952.6123936816525,
+        448.359659781288
+      ],
+      "target_mm": [
+        2952.6123936816525,
+        448.359659781288
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 5,
+      "is_yellow": true,
+      "start_mm": [
+        3739.9756986634266,
+        1000.6075334143378
+      ],
+      "target_mm": [
+        3739.9756986634266,
+        1000.6075334143378
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 1,
+      "is_yellow": false,
+      "start_mm": [
+        2777.6427703523696,
+        852.9769137302552
+      ],
+      "target_mm": [
+        3515.7958687727823,
+        787.363304981774
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 0,
+      "is_yellow": false,
+      "start_mm": [
+        2301.944106925881,
+        1208.3839611178616
+      ],
+      "target_mm": [
+        3936.81652490887,
+        929.5261239368166
+      ],
+      "orientation_rad": 0.0
+    }
+  ],
+  "obstacles": [
+    {
+      "obstacle_id": 2,
+      "is_yellow": false,
+      "position_mm": [
+        3548.602673147023,
+        803.7667071688943
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "obstacle_id": 3,
+      "is_yellow": false,
+      "position_mm": [
+        3510.3280680437424,
+        1104.4957472660997
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "obstacle_id": 5,
+      "is_yellow": false,
+      "position_mm": [
+        2345.686512758202,
+        552.2478736330498
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ]
+    }
+  ],
+  "schema_version": 1
+}

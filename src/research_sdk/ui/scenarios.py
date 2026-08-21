@@ -36,6 +36,39 @@ class Scenario:
     obstacles: list[ScenarioObstacle] = field(default_factory=list)
     schema_version: int = 1
 
+    def set_robot(self, robot: ScenarioRobot) -> int:
+        """Insert or move the single robot identified by team and robot ID."""
+        key = (robot.is_yellow, robot.robot_id)
+        self.obstacles[:] = [
+            obstacle
+            for obstacle in self.obstacles
+            if (obstacle.is_yellow, obstacle.obstacle_id) != key
+        ]
+        for index, current in enumerate(self.robots):
+            if (current.is_yellow, current.robot_id) == key:
+                self.robots[index] = robot
+                return index
+        self.robots.append(robot)
+        return len(self.robots) - 1
+
+    def set_obstacle(self, obstacle: ScenarioObstacle) -> int:
+        """Insert or move one grSim obstacle robot, keeping identities unique."""
+        key = (obstacle.is_yellow, obstacle.obstacle_id)
+        self.robots[:] = [
+            robot
+            for robot in self.robots
+            if (robot.is_yellow, robot.robot_id) != key
+        ]
+        for index, current in enumerate(self.obstacles):
+            if (current.is_yellow, current.obstacle_id) == key:
+                self.obstacles[index] = obstacle
+                return index
+        self.obstacles.append(obstacle)
+        return len(self.obstacles) - 1
+
+    def clear_obstacles(self) -> None:
+        self.obstacles.clear()
+
     def to_dict(self) -> dict:
         return asdict(self)
 

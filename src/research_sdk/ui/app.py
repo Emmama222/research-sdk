@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from math import cos, sin
 from pathlib import Path
 import sys
 import time
 
 import yaml
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -41,7 +42,12 @@ from research_sdk.config import (
     ROBOT_RADIUS_MM,
 )
 from research_sdk.network.ssl_sockets import Vision, grSimVision
-from research_sdk.ui.runtime import PlannedRobotPath, ResearchRuntime
+from research_sdk.ui.runtime import (
+    LiveRobot,
+    PlannedRobotPath,
+    ResearchRuntime,
+    live_world_from_vision_packet,
+)
 from research_sdk.ui.scenarios import (
     Scenario,
     ScenarioObstacle,
@@ -67,7 +73,7 @@ EDITABLE_CONFIGS = (
 
 
 class VisionMonitor(QThread):
-    packet_received = Signal(float)
+    packet_received = Signal(object, float)
     failed = Signal(str)
 
     def __init__(self, source: str, parent=None) -> None:
@@ -79,26 +85,30 @@ class VisionMonitor(QThread):
         return self._running
 
     def run(self) -> None:
-        try:
-            config = yaml.safe_load((CONFIG_FOLDER / "network_input.yaml").read_text())
-            if self.source == "grSim vision":
-                receiver = grSimVision(self, port=int(config["grsim_vision_port"]))
-            else:
-                receiver = Vision(
-                    self,
-                    port=int(config["ssl_vision_port"]),
-                    group=str(config["ssl_vision_multicast_group"]),
-                )
-            previous = time.perf_counter()
-            while self._running:
-                packet = receiver.listen()
-                if packet is None:
-                    continue
-                now = time.perf_counter()
-                self.packet_received.emit((now - previous) * 1000.0)
-                previous = now
-        except Exception as exc:
-            self.failed.emit(str(exc))
+        while self._running:
+            try:
+                config = yaml.safe_load((CONFIG_FOLDER / "network_input.yaml").read_text())
+                if self.source == "grSim vision":
+                    receiver = grSimVision(self, port=int(config["grsim_vision_port"]))
+                else:
+                    receiver = Vision(
+                        self,
+                        port=int(config["ssl_vision_port"]),
+                        group=str(config["ssl_vision_multicast_group"]),
+                    )
+                previous = time.perf_counter()
+                while self._running:
+                    packet = receiver.listen()
+                    if packet is None:
+                        continue
+                    now = time.perf_counter()
+                    self.packet_received.emit(packet, (now - previous) * 1000.0)
+                    previous = now
+            except Exception as exc:
+                if not self._running:
+                    break
+                self.failed.emit(str(exc))
+                self.msleep(1000)
 
     def stop(self) -> None:
         self._running = False
@@ -137,6 +147,41 @@ class FieldCanvas(QWidget):
         self.obstacle_id = 15
         self.obstacle_yellow = False
         self.obstacle_radius = ROBOT_RADIUS_MM
+        self.live_robots: dict[tuple[bool, int], LiveRobot] = {}
+        self.live_robot_seen_at: dict[tuple[bool, int], float] = {}
+        self.live_ball_mm: tuple[float, float] | None = None
+        self.live_ball_seen_at: float | None = None
+
+    def update_live_world(self, packet) -> None:
+        frame = live_world_from_vision_packet(packet)
+        if frame is None:
+            return
+        now = time.monotonic()
+        for robot in frame.robots:
+            key = (robot.is_yellow, robot.robot_id)
+            self.live_robots[key] = robot
+            self.live_robot_seen_at[key] = now
+        stale_keys = [
+            key for key, seen_at in self.live_robot_seen_at.items() if now - seen_at > 0.5
+        ]
+        for key in stale_keys:
+            self.live_robots.pop(key, None)
+            self.live_robot_seen_at.pop(key, None)
+        if frame.ball_mm is not None:
+            self.live_ball_mm = frame.ball_mm
+            self.live_ball_seen_at = now
+        elif self.live_ball_seen_at is not None and now - self.live_ball_seen_at > 0.5:
+            self.live_ball_mm = None
+            self.live_ball_seen_at = None
+        self.update()
+
+    def current_live_robots(self) -> dict[tuple[bool, int], LiveRobot]:
+        now = time.monotonic()
+        return {
+            key: robot
+            for key, robot in self.live_robots.items()
+            if now - self.live_robot_seen_at.get(key, 0.0) <= 0.5
+        }
 
     def set_scenario(self, scenario: Scenario | None) -> None:
         self.scenario = scenario
@@ -195,12 +240,38 @@ class FieldCanvas(QWidget):
         painter.drawEllipse(field.center(), centre_radius, centre_radius)
         self._draw_penalty_boxes(painter, field)
         self._draw_goals(painter, field)
+        self._draw_live_world(painter)
         if self.scenario is not None:
             self._draw_paths(painter)
             for obstacle in self.scenario.obstacles:
                 self._draw_obstacle(painter, obstacle)
             for index, robot in enumerate(self.scenario.robots):
                 self._draw_robot(painter, robot, index == self.selected_robot)
+
+    def _draw_live_world(self, painter: QPainter) -> None:
+        radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
+        for robot in self.live_robots.values():
+            centre = self._to_screen(robot.position_mm)
+            color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
+            painter.setBrush(color)
+            painter.setPen(QPen(color.darker(), 2))
+            painter.drawEllipse(centre, radius, radius)
+            painter.setPen(QPen(QColor("#101820"), 2))
+            painter.drawLine(
+                centre,
+                centre
+                + QPointF(
+                    radius * cos(robot.orientation_rad),
+                    -radius * sin(robot.orientation_rad),
+                ),
+            )
+            painter.drawText(centre + QPointF(-4, 5), str(robot.robot_id))
+        if self.live_ball_mm is not None:
+            centre = self._to_screen(self.live_ball_mm)
+            ball_radius = max(4.0, 21.5 * self._field_rect().width() / FIELD_LENGTH_MM)
+            painter.setBrush(QColor("#ff7043"))
+            painter.setPen(QPen(QColor("#ffccbc"), 1))
+            painter.drawEllipse(centre, ball_radius, ball_radius)
 
     def _draw_penalty_boxes(self, painter: QPainter, field: QRectF) -> None:
         depth = DEFENCE_X_MM * field.width() / FIELD_LENGTH_MM
@@ -219,8 +290,8 @@ class FieldCanvas(QWidget):
         target = self._to_screen(robot.target_mm)
         radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
         color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
-        painter.setBrush(color)
-        painter.setPen(QPen(QColor("white") if selected else color.darker(), 3 if selected else 1))
+        painter.setBrush(QColor(color.red(), color.green(), color.blue(), 75))
+        painter.setPen(QPen(QColor("white") if selected else color, 3 if selected else 2, Qt.DashLine))
         painter.drawEllipse(start, radius, radius)
         painter.setBrush(Qt.NoBrush)
         painter.setPen(QPen(color, 2, Qt.DashLine))
@@ -252,15 +323,24 @@ class FieldCanvas(QWidget):
             return
         point = self._to_world(event.position())
         if self.mode == "add_robot":
-            self.scenario.robots.append(
-                ScenarioRobot(self.robot_id, self.robot_yellow, point, point)
+            existing = next(
+                (
+                    robot
+                    for robot in self.scenario.robots
+                    if robot.robot_id == self.robot_id
+                    and robot.is_yellow == self.robot_yellow
+                ),
+                None,
             )
-            self.selected_robot = len(self.scenario.robots) - 1
+            target = existing.target_mm if existing is not None else point
+            self.selected_robot = self.scenario.set_robot(
+                ScenarioRobot(self.robot_id, self.robot_yellow, point, target)
+            )
         elif self.mode == "set_target" and self.selected_robot is not None:
             robot = self.scenario.robots[self.selected_robot]
             self.scenario.robots[self.selected_robot] = replace(robot, target_mm=point)
         elif self.mode == "add_obstacle":
-            self.scenario.obstacles.append(
+            self.scenario.set_obstacle(
                 ScenarioObstacle(
                     self.obstacle_id,
                     self.obstacle_yellow,
@@ -379,8 +459,12 @@ class ResearchConsole(QMainWindow):
         self.session = SessionController()
         self.runtime = ResearchRuntime()
         self.vision_thread: VisionMonitor | None = None
+        self.display_vision_thread: VisionMonitor | None = None
         self.current_scenario: Scenario | None = None
         self.recorder: ExperimentRecorder | None = None
+        self.control_timer = QTimer(self)
+        self.control_timer.setInterval(50)
+        self.control_timer.timeout.connect(self._control_tick)
 
         self.tabs = QTabWidget()
         self.experiment_page = QWidget()
@@ -392,6 +476,13 @@ class ResearchConsole(QMainWindow):
         self._build_toolbar()
         self._refresh_scenarios()
         self._refresh_controls()
+        self._start_live_grsim_display()
+
+    def _start_live_grsim_display(self) -> None:
+        self.display_vision_thread = VisionMonitor("grSim vision", self)
+        self.display_vision_thread.packet_received.connect(self._live_grsim_packet_received)
+        self.display_vision_thread.failed.connect(self._live_grsim_failed)
+        self.display_vision_thread.start()
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("View")
@@ -411,10 +502,12 @@ class ResearchConsole(QMainWindow):
         load_scenario = QPushButton("Load scenario")
         new_scenario = QPushButton("Plan a scenario")
         save_scenario = QPushButton("Save & forward to grSim")
+        test_grsim = QPushButton("Test grSim connection")
         form.addRow("Saved scenarios", self.scenario_selector)
         form.addRow(load_scenario)
         form.addRow(new_scenario)
         form.addRow(save_scenario)
+        form.addRow(test_grsim)
 
         self.edit_mode = QComboBox()
         self.edit_mode.addItems(("select", "add_robot", "set_target", "add_obstacle"))
@@ -425,6 +518,8 @@ class ResearchConsole(QMainWindow):
         form.addRow("Robot / obstacle ID", self.robot_id)
         form.addRow("Team", self.team)
         form.addRow("Obstacle radius (mm)", self.obstacle_radius)
+        clear_obstacles = QPushButton("Clear all obstacles")
+        form.addRow(clear_obstacles)
 
         self.planner_selector = QComboBox()
         planners = discover_planners()
@@ -467,11 +562,13 @@ class ResearchConsole(QMainWindow):
 
         new_scenario.clicked.connect(self._new_scenario)
         save_scenario.clicked.connect(self._save_scenario)
+        test_grsim.clicked.connect(self._test_grsim_connection)
         load_scenario.clicked.connect(self._load_scenario)
         self.edit_mode.currentTextChanged.connect(self._update_canvas_tool)
         self.robot_id.valueChanged.connect(self._update_canvas_tool)
         self.team.currentIndexChanged.connect(self._update_canvas_tool)
         self.obstacle_radius.valueChanged.connect(self._update_canvas_tool)
+        clear_obstacles.clicked.connect(self._clear_obstacles)
         self.run_button.clicked.connect(self._run)
         self.stop_button.clicked.connect(self._stop)
         self.erase_button.clicked.connect(self._erase)
@@ -503,6 +600,33 @@ class ResearchConsole(QMainWindow):
             self._refresh_controls()
         except Exception as exc:
             QMessageBox.critical(self, "Scenario forwarding failed", str(exc))
+
+    def _test_grsim_connection(self) -> None:
+        try:
+            probe = self.runtime.test_grsim_connection()
+            vision_confirmed = (
+                self.vision_thread is not None
+                and self.vision_thread.isRunning()
+                and self.runtime.last_receive_latency_ms is not None
+            )
+            confirmation = (
+                "Vision is also receiving packets from grSim."
+                if vision_confirmed
+                else "UDP has no acknowledgement; enable grSim vision to confirm receipt."
+            )
+            self.status.setText(
+                f"UDP route ready: {probe.local_address[0]}:{probe.local_address[1]} → "
+                f"{probe.destination[0]}:{probe.destination[1]}. {confirmation}"
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "grSim connection test failed", str(exc))
+
+    def _clear_obstacles(self) -> None:
+        if self.current_scenario is None:
+            return
+        self.current_scenario.clear_obstacles()
+        self._scenario_edited()
+        self.canvas.update()
 
     def _load_scenario(self) -> None:
         if not self.scenario_selector.currentData():
@@ -538,6 +662,8 @@ class ResearchConsole(QMainWindow):
             self.session.run()
             paths = self.runtime.plan(self.current_scenario)
             self.canvas.set_paths(paths)
+            self.runtime.start_execution(paths)
+            self.control_timer.start()
             self.recorder = ExperimentRecorder(
                 self.current_scenario.name,
                 self.planner_selector.currentText(),
@@ -562,6 +688,8 @@ class ResearchConsole(QMainWindow):
 
     def _stop(self) -> None:
         try:
+            self.control_timer.stop()
+            self.runtime.stop_execution()
             self.session.stop()
             if self.recorder is not None:
                 self.recorder.record("run_stopped")
@@ -573,6 +701,8 @@ class ResearchConsole(QMainWindow):
 
     def _erase(self) -> None:
         try:
+            self.control_timer.stop()
+            self.runtime.stop_execution()
             self.session.erase_plan()
             self.runtime.reset_planner()
             self.canvas.clear_paths()
@@ -588,6 +718,8 @@ class ResearchConsole(QMainWindow):
 
     def _reset(self) -> None:
         try:
+            self.control_timer.stop()
+            self.runtime.stop_execution()
             self.session.reset()
             self.runtime.reset_planner()
             self.canvas.clear_paths()
@@ -607,13 +739,14 @@ class ResearchConsole(QMainWindow):
             self.session.set_vision(enabled)
             if enabled:
                 self.vision_thread = VisionMonitor(self.vision_source.currentText(), self)
-                self.vision_thread.packet_received.connect(self.receive_latency.set_latency)
+                self.vision_thread.packet_received.connect(self._vision_packet_received)
                 self.vision_thread.failed.connect(self._vision_failed)
                 self.vision_thread.start()
                 self.status.setText("Vision started with current network_input.yaml")
             elif self.vision_thread is not None:
                 self.vision_thread.stop()
                 self.vision_thread = None
+                self.runtime.last_receive_latency_ms = None
                 self.receive_latency.set_latency(None)
             self._refresh_controls()
         except Exception as exc:
@@ -623,8 +756,47 @@ class ResearchConsole(QMainWindow):
             QMessageBox.warning(self, "Vision state unchanged", str(exc))
 
     def _vision_failed(self, message: str) -> None:
+        self.runtime.last_receive_latency_ms = None
         self.receive_latency.set_latency(None)
         self.status.setText(f"Vision error: {message}")
+
+    def _control_tick(self) -> None:
+        try:
+            if not self.runtime.execute_tick(self.canvas.current_live_robots()):
+                return
+            self.control_timer.stop()
+            self.runtime.stop_execution()
+            self.session.stop()
+            if self.recorder is not None and not self.recorder.closed:
+                self.recorder.record("robots_arrived")
+                self.recorder.close()
+            self.status.setText("Completed · all robots reached their targets")
+            self._refresh_controls()
+        except Exception as exc:
+            self.control_timer.stop()
+            try:
+                self.runtime.stop_execution()
+            except Exception:
+                pass
+            try:
+                self.session.stop()
+            except Exception:
+                pass
+            self.status.setText(f"Execution stopped: {exc}")
+            self._refresh_controls()
+
+    def _vision_packet_received(self, packet, latency_ms: float) -> None:
+        del packet
+        self.runtime.last_receive_latency_ms = latency_ms
+        self.receive_latency.set_latency(latency_ms)
+
+    def _live_grsim_packet_received(self, packet, latency_ms: float) -> None:
+        self.canvas.update_live_world(packet)
+        self.runtime.last_receive_latency_ms = latency_ms
+        self.receive_latency.set_latency(latency_ms)
+
+    def _live_grsim_failed(self, message: str) -> None:
+        self.status.setText(f"Live grSim display unavailable: {message}")
 
     def _export(self, format_name: str) -> None:
         destination, _ = QFileDialog.getSaveFileName(
@@ -659,6 +831,10 @@ class ResearchConsole(QMainWindow):
                 return
         if self.vision_thread is not None:
             self.vision_thread.stop()
+        self.control_timer.stop()
+        self.runtime.stop_execution()
+        if self.display_vision_thread is not None:
+            self.display_vision_thread.stop()
         if self.recorder is not None:
             self.recorder.close()
         event.accept()
