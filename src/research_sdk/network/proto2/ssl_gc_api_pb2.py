@@ -11,10 +11,10 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
-import TeamControl.network.proto2.ssl_gc_state_pb2 as ssl__gc__state__pb2
-import TeamControl.network.proto2.ssl_gc_change_pb2 as ssl__gc__change__pb2
-import TeamControl.network.proto2.ssl_gc_engine_pb2 as ssl__gc__engine__pb2
-import TeamControl.network.proto2.ssl_gc_engine_config_pb2 as ssl__gc__engine__config__pb2
+import research_sdk.network.proto2.ssl_gc_state_pb2 as ssl__gc__state__pb2
+import research_sdk.network.proto2.ssl_gc_change_pb2 as ssl__gc__change__pb2
+import research_sdk.network.proto2.ssl_gc_engine_pb2 as ssl__gc__engine__pb2
+import research_sdk.network.proto2.ssl_gc_engine_config_pb2 as ssl__gc__engine__config__pb2
 from google.protobuf import duration_pb2 as google_dot_protobuf_dot_duration__pb2
 
 

@@ -11,7 +11,7 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
-import TeamControl.network.proto2.ssl_vision_detection_tracked_pb2 as ssl__vision__detection__tracked__pb2
+import research_sdk.network.proto2.ssl_vision_detection_tracked_pb2 as ssl__vision__detection__tracked__pb2
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n ssl_vision_wrapper_tracked.proto\x1a\"ssl_vision_detection_tracked.proto\"_\n\x14TrackerWrapperPacket\x12\x0c\n\x04uuid\x18\x01 \x02(\t\x12\x13\n\x0bsource_name\x18\x02 \x01(\t\x12$\n\rtracked_frame\x18\x03 \x01(\x0b\x32\r.TrackedFrameBAZ?github.com/RoboCup-SSL/ssl-game-controller/internal/app/tracker')

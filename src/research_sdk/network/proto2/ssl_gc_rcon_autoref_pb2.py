@@ -11,8 +11,8 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
-import TeamControl.network.proto2.ssl_gc_game_event_pb2 as ssl__gc__game__event__pb2
-import TeamControl.network.proto2.ssl_gc_rcon_pb2 as ssl__gc__rcon__pb2
+import research_sdk.network.proto2.ssl_gc_game_event_pb2 as ssl__gc__game__event__pb2
+import research_sdk.network.proto2.ssl_gc_rcon_pb2 as ssl__gc__rcon__pb2
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x19ssl_gc_rcon_autoref.proto\x1a\x17ssl_gc_game_event.proto\x1a\x11ssl_gc_rcon.proto\"H\n\x13\x41utoRefRegistration\x12\x12\n\nidentifier\x18\x01 \x02(\t\x12\x1d\n\tsignature\x18\x02 \x01(\x0b\x32\n.Signature\"`\n\x13\x41utoRefToController\x12\x1d\n\tsignature\x18\x01 \x01(\x0b\x32\n.Signature\x12\x1e\n\ngame_event\x18\x02 \x01(\x0b\x32\n.GameEventJ\x04\x08\x03\x10\x04J\x04\x08\x04\x10\x05\"J\n\x13\x43ontrollerToAutoRef\x12,\n\x10\x63ontroller_reply\x18\x01 \x01(\x0b\x32\x10.ControllerReplyH\x00\x42\x05\n\x03msgB>Z<github.com/RoboCup-SSL/ssl-game-controller/internal/app/rcon')

@@ -11,8 +11,8 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
-import TeamControl.network.proto2.grSim_Commands_pb2 as grSim__Commands__pb2
-import TeamControl.network.proto2.grSim_Replacement_pb2 as grSim__Replacement__pb2
+import research_sdk.network.proto2.grSim_Commands_pb2 as grSim__Commands__pb2
+import research_sdk.network.proto2.grSim_Replacement_pb2 as grSim__Replacement__pb2
 
 
 DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12grSim_Packet.proto\x1a\x14grSim_Commands.proto\x1a\x17grSim_Replacement.proto\"Z\n\x0cgrSim_Packet\x12!\n\x08\x63ommands\x18\x01 \x01(\x0b\x32\x0f.grSim_Commands\x12\'\n\x0breplacement\x18\x02 \x01(\x0b\x32\x12.grSim_Replacement')
