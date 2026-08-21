@@ -1,7 +1,7 @@
 import socket
 from multiprocessing import Queue
 
-from research-sdk.process_workers.worker import BaseWorker
+from research_sdk.process_workers.worker import BaseWorker
 
 RECV_PORT = 50513
 RECV_TIMEOUT = 0.5

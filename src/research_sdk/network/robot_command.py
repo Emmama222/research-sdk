@@ -2,7 +2,7 @@
 import math
 import time
 
-from research-sdk.robot.constants import MAX_SPEED
+from research_sdk.robot.constants import MAX_SPEED
 
 
 def _clamp_velocity(vx: float, vy: float, max_speed: float = MAX_SPEED) -> tuple[float, float]:

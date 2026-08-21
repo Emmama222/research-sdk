@@ -1,9 +1,9 @@
-from research-sdk.SSL.vision.frame import Frame
-from research-sdk.SSL.vision.field import GeometryData
-from research-sdk.network.ssl_sockets import Vision,VisionTracker
-from research-sdk.utils.Logger import LogSaver
+from research_sdk.SSL.vision.frame import Frame
+from research_sdk.SSL.vision.field import GeometryData
+from research_sdk.network.ssl_sockets import Vision,VisionTracker
+from research_sdk.utils.Logger import LogSaver
 
-from research-sdk.process_workers.worker import BaseWorker
+from research_sdk.process_workers.worker import BaseWorker
 
 import numpy as np
 import time

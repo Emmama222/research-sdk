@@ -8,7 +8,7 @@ import socket
 import struct
 import time
 
-from research-sdk.network.baseUDP import BaseSocket,SocketType
+from research_sdk.network.baseUDP import BaseSocket,SocketType
 from multiprocessing import Event
 
 #logging
@@ -120,7 +120,7 @@ class SSL_Multicast(Receiver):
     def _get_vision_ip() -> str:
         # """Get vision network interface IP from ipconfig.yaml, fallback 0.0.0.0 (all interfaces)."""
         # try:
-            from research-sdk.utils.yaml_config import Config
+            from research_sdk.utils.yaml_config import Config
             cfg = Config()
             return cfg.vision_ip
         # except Exception:

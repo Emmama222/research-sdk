@@ -1,7 +1,7 @@
 # typings
 from multiprocessing import Process, Queue,Event
 # from multiprocessing.synchronize import Event
-from research-sdk.utils.Logger import LogSaver
+from research_sdk.utils.Logger import LogSaver
 import time 
 
 class BaseWorker():

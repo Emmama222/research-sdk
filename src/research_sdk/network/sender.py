@@ -12,7 +12,7 @@ log = logging.getLogger()
 log.setLevel(logging.DEBUG)
 
 
-from research-sdk.network.baseUDP import BaseSocket, SocketType
+from research_sdk.network.baseUDP import BaseSocket, SocketType
 
 class Sender(BaseSocket):
     def __init__(self, device_ip, type=SocketType.SOCK_UDP, binding=False) -> None:

@@ -5,15 +5,15 @@ from __future__ import annotations
 import time
 from multiprocessing import Queue
 
-from research-sdk.process_workers.worker import BaseWorker
-from research-sdk.world.field_config import (
+from research_sdk.process_workers.worker import BaseWorker
+from research_sdk.world.field_config import (
     FIELD_LENGTH_MM,
     FIELD_WIDTH_MM,
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_RENDER_DENSITY_PERCENT,
     VORONOI_RENDER_MAX_DENSITY_NODES,
 )
-from research-sdk.world.map.renderer import (
+from research_sdk.world.map.renderer import (
     BALL,
     BLUE,
     MapRenderData,
@@ -26,7 +26,7 @@ from research-sdk.world.map.renderer import (
     VELOCITY,
     YELLOW,
 )
-from research-sdk.world.map.voronoi_generator import generate_bounded_voronoi_map
+from research_sdk.world.map.voronoi_generator import generate_bounded_voronoi_map
 
 
 class WorldMapRenderWorker(BaseWorker):

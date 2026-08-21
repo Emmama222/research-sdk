@@ -1,5 +1,5 @@
-from research-sdk.network.proto2 import grSim_Commands_pb2,grSim_Packet_pb2,grSim_Replacement_pb2
-from research-sdk.network.robot_command import RobotCommand
+from research_sdk.network.proto2 import grSim_Commands_pb2,grSim_Packet_pb2,grSim_Replacement_pb2
+from research_sdk.network.robot_command import RobotCommand
 
 from typing import Optional
 

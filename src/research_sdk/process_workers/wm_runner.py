@@ -1,11 +1,11 @@
 # typings
 from multiprocessing import Queue,Process,Event
-from research-sdk.SSL.vision.field import GeometryData
-from research-sdk.SSL.vision.frame import Frame
-from research-sdk.world.model import WorldModel
-from research-sdk.utils.Logger import LogSaver
-from research-sdk.process_workers.worker import BaseWorker
-from research-sdk.onboard_vision import parse_packet
+from research_sdk.SSL.vision.field import GeometryData
+from research_sdk.SSL.vision.frame import Frame
+from research_sdk.world.model import WorldModel
+from research_sdk.utils.Logger import LogSaver
+from research_sdk.process_workers.worker import BaseWorker
+from research_sdk.onboard_vision import parse_packet
 import time
 
 
@@ -63,7 +63,7 @@ class WMWorker(BaseWorker):
             drained_gc += 1
             self.logger.info(f"[wmr] : Updating World Model Game Info {new_info[0]}")
             self.wm.update_gc_data(new_info)
-            from research-sdk.SSL.game_controller.common import PacketType
+            from research_sdk.SSL.game_controller.common import PacketType
             if new_info[0] == PacketType.NEW_STATE:
                 print(f"[wmr] → new game state: {new_info[1]}", flush=True)
             self.wm.update_gc_data(new_info)

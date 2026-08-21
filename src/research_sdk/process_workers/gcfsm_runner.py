@@ -1,8 +1,8 @@
-from research-sdk.SSL.game_controller.Message import RefereeMessage,GameEvent
-from research-sdk.SSL.game_controller.common import Command,Stage,GameEventType,Team,PacketType, GameState
-from research-sdk.network.ssl_sockets import GameControl
+from research_sdk.SSL.game_controller.Message import RefereeMessage,GameEvent
+from research_sdk.SSL.game_controller.common import Command,Stage,GameEventType,Team,PacketType, GameState
+from research_sdk.network.ssl_sockets import GameControl
 
-from research-sdk.process_workers.worker import BaseWorker
+from research_sdk.process_workers.worker import BaseWorker
 from multiprocessing import Queue
 from enum import Enum,auto
 import time
