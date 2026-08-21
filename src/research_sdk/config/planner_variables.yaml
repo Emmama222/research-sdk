@@ -1,0 +1,17 @@
+# Voronoi path-planning defaults.
+voronoi_boundary_inset_mm: 100.0
+voronoi_density_percent: 60.0
+voronoi_max_density_nodes: 140
+voronoi_render_density_percent: 10.0
+voronoi_render_max_density_nodes: 80
+voronoi_obstacle_cost_weight: 2.0
+voronoi_horizon_ms: 250
+voronoi_target_dead_zone_mm: 150.0
+voronoi_connection_count: 8
+voronoi_connection_radius_mm: 2200.0
+voronoi_endpoint_reach_mm: 70.0
+voronoi_escape_margin_mm: 120.0
+voronoi_min_escape_step_mm: 250.0
+
+
+# other implementation tunnables here
