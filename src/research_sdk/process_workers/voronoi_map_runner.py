@@ -6,14 +6,15 @@ import time
 from multiprocessing import Queue
 
 from research_sdk.process_workers.worker import BaseWorker
-from research_sdk.world.field_config import (
+from research_sdk.config import (
+    BALL_R,
     FIELD_LENGTH_MM,
     FIELD_WIDTH_MM,
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_RENDER_DENSITY_PERCENT,
     VORONOI_RENDER_MAX_DENSITY_NODES,
 )
-from research_sdk.world.map.renderer import (
+from research_sdk.ui.renderer import (
     BALL,
     BLUE,
     MapRenderData,
@@ -26,7 +27,7 @@ from research_sdk.world.map.renderer import (
     VELOCITY,
     YELLOW,
 )
-from research_sdk.world.map.voronoi_generator import generate_bounded_voronoi_map
+from research_sdk.world.map.voronoi.voronoi_generator import generate_bounded_voronoi_map
 
 
 class WorldMapRenderWorker(BaseWorker):
@@ -125,7 +126,7 @@ def _build_render_data(request: dict) -> tuple[MapRenderData, float | None]:
     if ball is not None:
         ball_color = BALL if ball_visible else "#a86320"
         ball_circles = (
-            RenderCircle(ball, 21.5, ball_color, filled=True),
+            RenderCircle(ball, BALL_R, ball_color, filled=True),
         )
         ball_vectors = (
             RenderVector(

@@ -1,7 +1,7 @@
-from research_sdk.SSL.vision.frame import Frame
-from research_sdk.SSL.vision.field import GeometryData
+from research_sdk.vision.frame import Frame
+from research_sdk.vision.field import GeometryData
 from research_sdk.network.ssl_sockets import Vision,VisionTracker
-from research_sdk.utils.Logger import LogSaver
+from research_sdk.config import SSL_VISION_PORT
 
 from research_sdk.process_workers.worker import BaseWorker
 
@@ -93,7 +93,6 @@ class VisionProcess(BaseWorker):
             self.output_q.put(data)
         else:
             self.logger.warning("[VP] : VISION QUEUE IS FULL — frame dropped")
-            print("[VP] WARNING: vision queue full, frame dropped (WMWorker may be lagging)", flush=True)
 
 
 if __name__ == "__main__" :
@@ -112,7 +111,7 @@ if __name__ == "__main__" :
                     item = input_q.get_nowait()
                     t = str(type(item))
                     # print(t)
-                    if t == "<class 'TeamControl.SSL.vision.field.GeometryData'>":
+                    if t == "<class 'TeamControl.vision.field.GeometryData'>":
                         count += 1
                         print(item)
                         if count == 4 :
@@ -127,7 +126,7 @@ if __name__ == "__main__" :
                 sys.exit()
     
     logger = None
-    output_q, use_grSim, vision_port = Queue(), True, 10006
+    output_q, use_grSim, vision_port = Queue(), True, SSL_VISION_PORT
 
     vision = Process(target=VisionProcess.run_worker,args=(is_running,logger,output_q, use_grSim, vision_port))
     reader = Process(target=read,args=(output_q,))

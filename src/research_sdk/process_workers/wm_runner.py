@@ -5,6 +5,7 @@ from research_sdk.vision.frame import Frame
 from research_sdk.world.model import WorldModel
 from research_sdk.process_workers.worker import BaseWorker
 # from research_sdk.onboard_vision import parse_packet
+import logging
 import time
 
 
@@ -63,7 +64,8 @@ class WMWorker(BaseWorker):
         return super().shutdown()        
 
 if __name__ == "__main__":
-    logger = LogSaver()
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger("research_sdk.worker.world_model")
     is_running = Event()
     is_running.set()
     
@@ -74,9 +76,8 @@ if __name__ == "__main__":
     worker = Process(target=WMWorker.run_worker,args=(is_running,logger,wm,vision_q,gc_q,),)
     worker.start()
     try: 
-        print("[main] : type something to quit")
-        s = input()
-        print("[main] : finishing this loop")
+        input("Press Enter to quit\n")
+        logger.info("stopping world-model worker")
         is_running.clear()
         
     
