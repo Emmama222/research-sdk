@@ -1,11 +1,13 @@
 from research_sdk.config import GRSIM_COMMAND_IP, GRSIM_COMMAND_PORT
 from research_sdk.network.proto2 import ssl_vision_wrapper_pb2
+from research_sdk.process_workers.vision_runner import VisionFrameAssembler
 from research_sdk.ui.runtime import (
     LiveRobot,
     ResearchRuntime,
     live_world_from_vision_packet,
     waypoint_command,
 )
+from research_sdk.world.snapshot import world_snapshot_from_frame
 
 
 class _FakeSocket:
@@ -83,6 +85,65 @@ def test_live_world_ignores_geometry_only_packet() -> None:
     packet.geometry.field.field_length = 12000
 
     assert live_world_from_vision_packet(packet) is None
+
+
+def test_vision_packet_reuses_world_snapshot_contract() -> None:
+    packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
+    detection = packet.detection
+    detection.frame_number = 7
+    detection.t_capture = 12.5
+    detection.t_sent = 12.6
+    detection.camera_id = 0
+    robot = detection.robots_yellow.add()
+    robot.confidence = 0.9
+    robot.robot_id = 3
+    robot.x = 120.0
+    robot.y = -80.0
+    robot.orientation = 0.25
+    robot.pixel_x = 0.0
+    robot.pixel_y = 0.0
+    ball = detection.balls.add()
+    ball.confidence = 0.8
+    ball.x = 10.0
+    ball.y = 20.0
+    ball.pixel_x = 0.0
+    ball.pixel_y = 0.0
+
+    assembler = VisionFrameAssembler(1)
+    frame = assembler.push(detection)
+    snapshot = world_snapshot_from_frame(frame, version=4)
+
+    assert snapshot is not None
+    assert snapshot.version == 4
+    assert snapshot.frame_number == 7
+    assert snapshot.yellow_robot(3).position == (120.0, -80.0)
+    assert snapshot.ball.position == (10.0, 20.0)
+
+
+def test_runtime_execution_reads_robots_from_world_snapshot() -> None:
+    packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
+    detection = packet.detection
+    detection.frame_number = 1
+    detection.t_capture = 1.0
+    detection.t_sent = 1.0
+    detection.camera_id = 0
+    robot = detection.robots_blue.add()
+    robot.confidence = 1.0
+    robot.robot_id = 2
+    robot.x = 5.0
+    robot.y = 6.0
+    robot.orientation = 0.5
+    robot.pixel_x = 0.0
+    robot.pixel_y = 0.0
+    runtime = ResearchRuntime()
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+
+    live = runtime.live_robots[(False, 2)]
+    assert live.position_mm == (5.0, 6.0)
+    assert live.orientation_rad == 0.5
 
 
 def test_waypoint_command_transforms_world_velocity_into_robot_frame() -> None:
