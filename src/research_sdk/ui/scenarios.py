@@ -21,6 +21,12 @@ class ScenarioRobot:
 
 
 @dataclass(frozen=True, slots=True)
+class ScenarioBall:
+    position_mm: Point
+    velocity_mmps: Point = (0.0, 0.0)
+
+
+@dataclass(frozen=True, slots=True)
 class ScenarioObstacle:
     obstacle_id: int
     is_yellow: bool
@@ -34,7 +40,8 @@ class Scenario:
     name: str
     robots: list[ScenarioRobot] = field(default_factory=list)
     obstacles: list[ScenarioObstacle] = field(default_factory=list)
-    schema_version: int = 1
+    ball: ScenarioBall | None = None
+    schema_version: int = 2
 
     def set_robot(self, robot: ScenarioRobot) -> int:
         """Insert or move the single robot identified by team and robot ID."""
@@ -96,6 +103,14 @@ class Scenario:
                 )
                 for obstacle in payload.get("obstacles", ())
             ],
+            ball=(
+                ScenarioBall(
+                    position_mm=tuple(payload["ball"]["position_mm"]),
+                    velocity_mmps=tuple(payload["ball"].get("velocity_mmps", (0.0, 0.0))),
+                )
+                if payload.get("ball") is not None
+                else None
+            ),
             schema_version=int(payload.get("schema_version", 1)),
         )
 
@@ -111,6 +126,21 @@ class ScenarioStore:
         path = self.folder / f"{_safe_name(scenario.name)}.json"
         path.write_text(json.dumps(scenario.to_dict(), indent=2), encoding="utf-8")
         return path
+
+    def update(self, path: str | Path, scenario: Scenario) -> Path:
+        """Update an existing course file without changing its filename."""
+        destination = Path(path)
+        if not destination.is_absolute() and destination.parent == Path("."):
+            destination = self.folder / destination
+        if destination.suffix.lower() != ".json":
+            destination = destination.with_suffix(".json")
+        if not destination.exists():
+            raise FileNotFoundError(f"Course file does not exist: {destination}")
+        destination.write_text(
+            json.dumps(scenario.to_dict(), indent=2),
+            encoding="utf-8",
+        )
+        return destination
 
     def load(self, name_or_path: str | Path) -> Scenario:
         path = Path(name_or_path)

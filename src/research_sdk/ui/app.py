@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -49,6 +50,7 @@ from research_sdk.ui.runtime import (
 )
 from research_sdk.ui.scenarios import (
     Scenario,
+    ScenarioBall,
     ScenarioObstacle,
     ScenarioRobot,
     ScenarioStore,
@@ -502,6 +504,7 @@ class ResearchConsole(QMainWindow):
         self.vision_thread: VisionMonitor | None = None
         self.display_vision_thread: VisionMonitor | None = None
         self.current_scenario: Scenario | None = None
+        self.current_scenario_path: Path | None = None
         self.recorder: ExperimentRecorder | None = None
         self.control_timer = QTimer(self)
         self.control_timer.setInterval(50)
@@ -548,11 +551,15 @@ class ResearchConsole(QMainWindow):
 
         self.scenario_selector = QComboBox()
         load_scenario = QPushButton("Load scenario")
+        self.save_plan_button = QPushButton("Save plan as new file")
+        self.update_plan_button = QPushButton("Update loaded plan")
         self.fresh_snapshot_button = QPushButton("Fresh snapshot")
         self.apply_plan_button = QPushButton("Apply to grSim")
         test_grsim = QPushButton("Test grSim connection")
         form.addRow("Saved scenarios", self.scenario_selector)
         form.addRow(load_scenario)
+        form.addRow(self.save_plan_button)
+        form.addRow(self.update_plan_button)
         form.addRow(self.fresh_snapshot_button)
         form.addRow(self.apply_plan_button)
         form.addRow(test_grsim)
@@ -607,6 +614,8 @@ class ResearchConsole(QMainWindow):
         self.apply_plan_button.clicked.connect(self._save_scenario)
         test_grsim.clicked.connect(self._test_grsim_connection)
         load_scenario.clicked.connect(self._load_scenario)
+        self.save_plan_button.clicked.connect(self._save_plan_as)
+        self.update_plan_button.clicked.connect(self._update_plan_file)
         self.edit_mode.currentTextChanged.connect(self._update_canvas_tool)
         self.robot_id.valueChanged.connect(self._update_canvas_tool)
         self.team.currentIndexChanged.connect(self._update_canvas_tool)
@@ -640,6 +649,7 @@ class ResearchConsole(QMainWindow):
             )
             return
         self.current_scenario = None
+        self.current_scenario_path = None
         self.canvas.set_scenario(None)
         self.canvas.capture_world_snapshot(snapshot)
         self.edit_mode.setCurrentText("select_live_robot")
@@ -652,29 +662,36 @@ class ResearchConsole(QMainWindow):
         )
 
     def _select_plan_robot(self, robot: LiveRobot) -> None:
-        obstacles = [
-            ScenarioObstacle(
-                obstacle_id=other.robot_id,
-                is_yellow=other.is_yellow,
-                position_mm=other.position_mm,
-                radius_mm=ROBOT_RADIUS_MM,
+        robots = [
+            ScenarioRobot(
+                robot.robot_id,
+                robot.is_yellow,
+                robot.position_mm,
+                robot.position_mm,
+                robot.orientation_rad,
+            )
+        ]
+        robots.extend(
+            ScenarioRobot(
+                other.robot_id,
+                other.is_yellow,
+                other.position_mm,
+                other.position_mm,
+                other.orientation_rad,
             )
             for other in self.canvas.live_robots.values()
             if (other.is_yellow, other.robot_id) != (robot.is_yellow, robot.robot_id)
-        ]
+        )
         self.current_scenario = Scenario(
             f"snapshot_{int(time.time())}",
-            robots=[
-                ScenarioRobot(
-                    robot.robot_id,
-                    robot.is_yellow,
-                    robot.position_mm,
-                    robot.position_mm,
-                    robot.orientation_rad,
-                )
-            ],
-            obstacles=obstacles,
+            robots=robots,
+            ball=(
+                ScenarioBall(self.canvas.live_ball_mm)
+                if self.canvas.live_ball_mm is not None
+                else None
+            ),
         )
+        self.current_scenario_path = None
         self.canvas.set_scenario(self.current_scenario)
         self.canvas.selected_robot = 0
         self.edit_mode.setCurrentText("relocate_start")
@@ -682,6 +699,57 @@ class ResearchConsole(QMainWindow):
             f"Selected {'yellow' if robot.is_yellow else 'blue'} robot {robot.robot_id}. "
             "Click its proposed start, then choose Set target and click the destination."
         )
+        self._refresh_controls()
+
+    def _save_plan_as(self) -> None:
+        if self.current_scenario is None or not self.current_scenario.robots:
+            QMessageBox.warning(self, "Nothing to save", "Capture and select a robot first.")
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "Save plan",
+            "Course name",
+            text=self.current_scenario.name,
+        )
+        if not accepted or not name.strip():
+            return
+        try:
+            self.current_scenario.name = name.strip()
+            self.current_scenario.schema_version = 2
+            path = self.store.save(self.current_scenario)
+            self.current_scenario_path = path
+            self._refresh_scenarios()
+            index = self.scenario_selector.findData(str(path))
+            if index >= 0:
+                self.scenario_selector.setCurrentIndex(index)
+            self.status.setText(
+                f"Saved {path.name}: {len(self.current_scenario.robots)} robots and "
+                f"ball={'yes' if self.current_scenario.ball is not None else 'no'}"
+            )
+            self._refresh_controls()
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot save plan", str(exc))
+
+    def _update_plan_file(self) -> None:
+        if self.current_scenario is None or not self.current_scenario.robots:
+            QMessageBox.warning(self, "Nothing to update", "Capture or load a plan first.")
+            return
+        if self.current_scenario_path is None:
+            QMessageBox.information(
+                self,
+                "Save required",
+                "This is a new plan. Use Save plan as new file first.",
+            )
+            return
+        try:
+            self.current_scenario.schema_version = 2
+            path = self.store.update(self.current_scenario_path, self.current_scenario)
+            self.status.setText(
+                f"Updated {path.name}: {len(self.current_scenario.robots)} robots and "
+                f"ball={'yes' if self.current_scenario.ball is not None else 'no'}"
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot update plan", str(exc))
 
     def _save_scenario(self) -> None:
         if self.current_scenario is None or not self.current_scenario.robots:
@@ -735,9 +803,15 @@ class ResearchConsole(QMainWindow):
         if not self.scenario_selector.currentData():
             return
         try:
-            self.current_scenario = self.store.load(self.scenario_selector.currentData())
+            path = Path(self.scenario_selector.currentData())
+            self.current_scenario = self.store.load(path)
+            self.current_scenario_path = path
             self.canvas.set_scenario(self.current_scenario)
+            if self.current_scenario.ball is not None:
+                self.canvas.live_ball_mm = self.current_scenario.ball.position_mm
+                self.canvas.live_ball_seen_at = time.monotonic()
             self.status.setText(f"Loaded {self.current_scenario.name}; forward it before running")
+            self._refresh_controls()
         except Exception as exc:
             QMessageBox.critical(self, "Cannot load scenario", str(exc))
 
@@ -756,7 +830,7 @@ class ResearchConsole(QMainWindow):
 
     def _scenario_edited(self) -> None:
         self.canvas.clear_paths()
-        self.status.setText("Scenario edited; save and forward changes before running")
+        self.status.setText("Plan edited; use Update loaded plan or Save plan as new file")
 
     def _run(self) -> None:
         if self.current_scenario is None:
@@ -932,6 +1006,12 @@ class ResearchConsole(QMainWindow):
         self.vision_button.setEnabled(self.session.can_change_vision)
         self.vision_source.setEnabled(self.session.can_change_vision_source)
         self.planner_selector.setEnabled(state is not SessionState.RUNNING)
+        self.save_plan_button.setEnabled(
+            state is not SessionState.RUNNING and self.current_scenario is not None
+        )
+        self.update_plan_button.setEnabled(
+            state is not SessionState.RUNNING and self.current_scenario_path is not None
+        )
 
     def closeEvent(self, event) -> None:
         if self.config_page.dirty:
