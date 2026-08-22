@@ -1,5 +1,10 @@
 """World-state models and immutable planning inputs."""
 
+from research_sdk.world.pipeline import (
+    VisionWorldPipeline,
+    WorldPipelineUpdate,
+    WorldSnapshotStore,
+)
 from research_sdk.world.scene import FieldDimensions, PlanningObstacle, PlanningScene
 from research_sdk.world.snapshot import BallSnapshot, RobotSnapshot, WorldSnapshot
 
@@ -9,5 +14,8 @@ __all__ = [
     "PlanningObstacle",
     "PlanningScene",
     "RobotSnapshot",
+    "VisionWorldPipeline",
+    "WorldPipelineUpdate",
     "WorldSnapshot",
+    "WorldSnapshotStore",
 ]

@@ -15,7 +15,9 @@ from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.ssl_sockets import grSimSender
 from research_sdk.planners import PlannerAPI, PlannerInput
 from research_sdk.ui.scenarios import Scenario
+from research_sdk.world.pipeline import VisionWorldPipeline
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
+from research_sdk.world.snapshot import WorldSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,18 @@ def live_world_from_vision_packet(packet) -> LiveWorldFrame | None:
     return LiveWorldFrame(robots=robots, ball_mm=ball_mm)
 
 
+def live_world_from_snapshot(snapshot: WorldSnapshot) -> LiveWorldFrame:
+    robots = (*snapshot.yellow, *snapshot.blue)
+    return LiveWorldFrame(
+        robots=tuple(
+            LiveRobot(robot.robot_id, robot.isYellow, robot.position, robot.theta)
+            for robot in robots
+            if robot is not None
+        ),
+        ball_mm=None if snapshot.ball is None else snapshot.ball.position,
+    )
+
+
 def waypoint_command(
     robot: LiveRobot,
     target_mm: tuple[float, float],
@@ -96,10 +110,37 @@ class ResearchRuntime:
         self._planner = PlannerAPI()
         self.last_send_latency_ms: float | None = None
         self.last_receive_latency_ms: float | None = None
+        self.world_pipeline = VisionWorldPipeline(cameras=4)
+        self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
         self._waypoint_indices: dict[tuple[bool, int], int] = {}
 
-    def apply_scenario(self, scenario: Scenario) -> None:
+    def ingest_vision_packet(self, packet) -> LiveWorldFrame | None:
+        """Update the runtime's world-state boundary from one vision packet."""
+        update = self.world_pipeline.ingest(packet)
+        return None if update is None else live_world_from_snapshot(update.snapshot)
+
+    @property
+    def world_snapshot(self) -> WorldSnapshot | None:
+        return self.world_pipeline.store.current
+
+    @property
+    def live_robots(self) -> dict[tuple[bool, int], LiveRobot]:
+        snapshot = self.world_snapshot
+        if snapshot is None:
+            return {}
+        return {
+            (robot.isYellow, robot.robot_id): LiveRobot(
+                robot.robot_id,
+                robot.isYellow,
+                robot.position,
+                robot.theta,
+            )
+            for robot in (*snapshot.yellow, *snapshot.blue)
+            if robot is not None
+        }
+
+    def apply_scenario(self, scenario: Scenario, *, include_obstacles: bool = True) -> None:
         replacements = [
             {
                 "x": robot.start_mm[0] / 1000.0,
@@ -110,16 +151,17 @@ class ResearchRuntime:
             }
             for robot in scenario.robots
         ]
-        replacements.extend(
-            {
-                "x": obstacle.position_mm[0] / 1000.0,
-                "y": obstacle.position_mm[1] / 1000.0,
-                "orientation": 0.0,
-                "robot_id": obstacle.obstacle_id,
-                "isYellow": obstacle.is_yellow,
-            }
-            for obstacle in scenario.obstacles
-        )
+        if include_obstacles:
+            replacements.extend(
+                {
+                    "x": obstacle.position_mm[0] / 1000.0,
+                    "y": obstacle.position_mm[1] / 1000.0,
+                    "orientation": 0.0,
+                    "robot_id": obstacle.obstacle_id,
+                    "isYellow": obstacle.is_yellow,
+                }
+                for obstacle in scenario.obstacles
+            )
         packet = grSimPacketFactory.scenario_replacement_command(replacements)
         started = perf_counter()
         self._get_sender().send_packet(packet)
@@ -167,6 +209,7 @@ class ResearchRuntime:
         self._planner.reset()
 
     def start_execution(self, paths: tuple[PlannedRobotPath, ...]) -> None:
+        self.active_paths = paths
         self._active_paths = {(path.is_yellow, path.robot_id): path for path in paths}
         self._waypoint_indices = {
             key: min(1, len(path.points_mm)) for key, path in self._active_paths.items()
@@ -208,6 +251,7 @@ class ResearchRuntime:
             self._send_stop(key)
         self._active_paths.clear()
         self._waypoint_indices.clear()
+        self.active_paths = ()
 
     def _send_stop(self, key: tuple[bool, int]) -> None:
         is_yellow, robot_id = key

@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-
 MAX_ROBOTS = 16
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +109,47 @@ class WorldSnapshot:
 
 def empty_robot_team() -> tuple[RobotSnapshot | None, ...]:
     return (None,) * MAX_ROBOTS
+
+
+def world_snapshot_from_frame(
+    frame,
+    *,
+    version: int = 0,
+    us_yellow: bool = True,
+    us_positive: bool = True,
+) -> WorldSnapshot:
+    """Build the shared immutable snapshot from a completed VisionProcess Frame."""
+    yellow = list(empty_robot_team())
+    blue = list(empty_robot_team())
+    for is_yellow, team, target in (
+        (True, frame.robots_yellow, yellow),
+        (False, frame.robots_blue, blue),
+    ):
+        for robot in team:
+            target[int(robot.id)] = RobotSnapshot(
+                isYellow=is_yellow,
+                robot_id=int(robot.id),
+                x=float(robot.x),
+                y=float(robot.y),
+                theta=float(robot.o),
+                confidence=float(robot.confidence),
+            )
+    balls = tuple(
+        BallSnapshot(float(ball.x), float(ball.y), float(ball.c))
+        for ball in frame.balls
+    )
+    ball = max(balls, key=lambda item: item.confidence, default=None)
+    return WorldSnapshot(
+        version=version,
+        timestamp=float(frame.t_capture),
+        frame_number=int(frame.frame_number),
+        ball=ball,
+        yellow=tuple(yellow),
+        blue=tuple(blue),
+        us_yellow=us_yellow,
+        us_positive=us_positive,
+        ball_candidates=balls,
+    )
 
 
 def snapshot_to_dict(snapshot: WorldSnapshot) -> dict:

@@ -4,24 +4,21 @@
 @author - Emma
 '''
 
-from research_sdk.vision.frame_list import FrameList
-from research_sdk.vision.field import GeometryData,FieldSize
-from research_sdk.vision.frame import Frame
-
-from multiprocessing import Queue,Manager
-import numpy as np
-import numpy.typing as npt
 import logging
 import time
+from dataclasses import replace
 
+from research_sdk.vision.field import FieldSize, GeometryData
+from research_sdk.vision.frame import Frame
+from research_sdk.vision.frame_list import FrameList
+from research_sdk.world.map.world_map import WorldMap
 from research_sdk.world.snapshot import (
     BallSnapshot,
     RobotSnapshot,
     WorldSnapshot,
     empty_robot_team,
+    world_snapshot_from_frame,
 )
-from research_sdk.world.map.world_map import WorldMap
-
 
 log = logging.getLogger()
 log.setLevel(logging.DEBUG)
@@ -42,7 +39,6 @@ class WorldModel:
         us_yellow: bool = True,
         us_positive: bool = True,
     ):
-        mgr = Manager()
         self._us_yellow = us_yellow
         self._us_positive = us_positive
         self.count = 0
@@ -51,7 +47,7 @@ class WorldModel:
         self.frame_list:FrameList[Frame] = FrameList(history=history)
         self.geometry:GeometryData = None
         self.field:FieldSize = None
-        self._version = mgr.Value('i', 0)   # int counter
+        self._version = 0
         self._state = None # current state from GC
         self._gc_status = {
             "stage": None,
@@ -73,12 +69,12 @@ class WorldModel:
         self.world_map = WorldMap()
 
     def _bump_version(self):
-        self._version.value += 1
+        self._version += 1
 
     def add_new_frame(self, frame: Frame):
         self.count += 1
         if self.count >= self.update_interval:
-            self._version.value += 1
+            self._version += 1
             self.count = 0
         self.frame_list.append(frame)
         self.world_map.update(self.snapshot())
@@ -106,7 +102,7 @@ class WorldModel:
         return self.frame_list.get_last_n_frames(n)
 
     def get_version(self):
-        return self._version.value
+        return self._version
 
     def snapshot(self) -> WorldSnapshot:
         """Return an immutable snapshot of the current world state.
@@ -115,6 +111,19 @@ class WorldModel:
         object does not expose the mutable SSL-Vision Frame/Robot/Ball objects.
         """
         frame = self.frame_list.latest
+
+        if frame is not None:
+            return replace(
+                world_snapshot_from_frame(
+                    frame,
+                    version=self.get_version(),
+                    us_yellow=self._us_yellow,
+                    us_positive=self._us_positive,
+                ),
+                game_state=self._state,
+                active_robots=self.robot_active,
+                ball_left_field=self.blf_location,
+            )
 
         ball = None
         ball_candidates = ()

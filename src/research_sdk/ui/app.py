@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import sys
+import time
 from dataclasses import replace
 from math import cos, sin
 from pathlib import Path
-import sys
-import time
 
 import yaml
 from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
@@ -18,12 +18,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QPlainTextEdit,
+    QPushButton,
     QSpinBox,
     QSplitter,
     QTabWidget,
@@ -61,7 +60,6 @@ from research_sdk.ui.session import (
     discover_planners,
     export_placeholder_results,
 )
-
 
 CONFIG_FOLDER = Path(__file__).resolve().parents[1] / "config"
 EDITABLE_CONFIGS = (
@@ -134,6 +132,7 @@ class LatencyLabel(QLabel):
 
 class FieldCanvas(QWidget):
     scenario_changed = Signal()
+    live_robot_selected = Signal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -156,6 +155,9 @@ class FieldCanvas(QWidget):
         frame = live_world_from_vision_packet(packet)
         if frame is None:
             return
+        self.update_live_frame(frame)
+
+    def update_live_frame(self, frame) -> None:
         now = time.monotonic()
         for robot in frame.robots:
             key = (robot.is_yellow, robot.robot_id)
@@ -173,6 +175,25 @@ class FieldCanvas(QWidget):
         elif self.live_ball_seen_at is not None and now - self.live_ball_seen_at > 0.5:
             self.live_ball_mm = None
             self.live_ball_seen_at = None
+        self.update()
+
+    def capture_world_snapshot(self, snapshot) -> None:
+        """Render a frozen copy of the shared WorldSnapshot contract."""
+        robots = (*snapshot.yellow, *snapshot.blue)
+        self.live_robots = {
+            (robot.isYellow, robot.robot_id): LiveRobot(
+                robot.robot_id,
+                robot.isYellow,
+                robot.position,
+                robot.theta,
+            )
+            for robot in robots
+            if robot is not None
+        }
+        now = time.monotonic()
+        self.live_robot_seen_at = {key: now for key in self.live_robots}
+        self.live_ball_mm = None if snapshot.ball is None else snapshot.ball.position
+        self.live_ball_seen_at = now if self.live_ball_mm is not None else None
         self.update()
 
     def current_live_robots(self) -> dict[tuple[bool, int], LiveRobot]:
@@ -319,10 +340,20 @@ class FieldCanvas(QWidget):
             painter.drawPath(drawing)
 
     def mousePressEvent(self, event) -> None:
-        if self.scenario is None or not self._field_rect().contains(event.position()):
+        if not self._field_rect().contains(event.position()):
+            return
+        if self.mode == "select_live_robot":
+            robot = self._nearest_live_robot(event.position())
+            if robot is not None:
+                self.live_robot_selected.emit(robot)
+            return
+        if self.scenario is None:
             return
         point = self._to_world(event.position())
-        if self.mode == "add_robot":
+        if self.mode == "relocate_start" and self.selected_robot is not None:
+            robot = self.scenario.robots[self.selected_robot]
+            self.scenario.robots[self.selected_robot] = replace(robot, start_mm=point)
+        elif self.mode == "add_robot":
             existing = next(
                 (
                     robot
@@ -352,6 +383,16 @@ class FieldCanvas(QWidget):
             self.selected_robot = self._nearest_robot(event.position())
         self.scenario_changed.emit()
         self.update()
+
+    def _nearest_live_robot(self, point: QPointF) -> LiveRobot | None:
+        candidates = [
+            ((self._to_screen(robot.position_mm) - point).manhattanLength(), robot)
+            for robot in self.live_robots.values()
+        ]
+        if not candidates:
+            return None
+        distance, robot = min(candidates, key=lambda item: item[0])
+        return robot if distance < 35 else None
 
     def _nearest_robot(self, point: QPointF) -> int | None:
         if self.scenario is None:
@@ -489,37 +530,39 @@ class ResearchConsole(QMainWindow):
         self.addToolBar(toolbar)
         map_action = QAction("Display map", self, checkable=True)
         map_action.setChecked(True)
+        map_action.toggled.connect(self.live_canvas.setVisible)
         map_action.toggled.connect(self.canvas.setVisible)
         toolbar.addAction(map_action)
 
     def _build_experiment_page(self) -> None:
+        self.live_canvas = FieldCanvas()
         self.canvas = FieldCanvas()
         self.canvas.scenario_changed.connect(self._scenario_edited)
+        self.canvas.live_robot_selected.connect(self._select_plan_robot)
+        self.field_tabs = QTabWidget()
+        self.field_tabs.addTab(self.live_canvas, "Existing Field")
+        self.field_tabs.addTab(self.canvas, "Plan Course")
+        self.field_tabs.currentChanged.connect(self._field_mode_changed)
         panel = QWidget()
         form = QFormLayout(panel)
 
         self.scenario_selector = QComboBox()
         load_scenario = QPushButton("Load scenario")
-        new_scenario = QPushButton("Plan a scenario")
-        save_scenario = QPushButton("Save & forward to grSim")
+        self.fresh_snapshot_button = QPushButton("Fresh snapshot")
+        self.apply_plan_button = QPushButton("Apply to grSim")
         test_grsim = QPushButton("Test grSim connection")
         form.addRow("Saved scenarios", self.scenario_selector)
         form.addRow(load_scenario)
-        form.addRow(new_scenario)
-        form.addRow(save_scenario)
+        form.addRow(self.fresh_snapshot_button)
+        form.addRow(self.apply_plan_button)
         form.addRow(test_grsim)
 
         self.edit_mode = QComboBox()
-        self.edit_mode.addItems(("select", "add_robot", "set_target", "add_obstacle"))
+        self.edit_mode.addItems(("select_live_robot", "relocate_start", "set_target"))
         self.robot_id = QSpinBox(); self.robot_id.setRange(0, 15)
         self.team = QComboBox(); self.team.addItems(("Yellow", "Blue"))
         self.obstacle_radius = QSpinBox(); self.obstacle_radius.setRange(1, 2000); self.obstacle_radius.setValue(int(ROBOT_RADIUS_MM))
-        form.addRow("Canvas tool", self.edit_mode)
-        form.addRow("Robot / obstacle ID", self.robot_id)
-        form.addRow("Team", self.team)
-        form.addRow("Obstacle radius (mm)", self.obstacle_radius)
-        clear_obstacles = QPushButton("Clear all obstacles")
-        form.addRow(clear_obstacles)
+        form.addRow("Plan Course tool", self.edit_mode)
 
         self.planner_selector = QComboBox()
         planners = discover_planners()
@@ -554,21 +597,20 @@ class ResearchConsole(QMainWindow):
         form.addRow("Status", self.status)
 
         splitter = QSplitter()
-        splitter.addWidget(self.canvas)
+        splitter.addWidget(self.field_tabs)
         splitter.addWidget(panel)
         splitter.setStretchFactor(0, 1)
         layout = QVBoxLayout(self.experiment_page)
         layout.addWidget(splitter)
 
-        new_scenario.clicked.connect(self._new_scenario)
-        save_scenario.clicked.connect(self._save_scenario)
+        self.fresh_snapshot_button.clicked.connect(self._new_scenario)
+        self.apply_plan_button.clicked.connect(self._save_scenario)
         test_grsim.clicked.connect(self._test_grsim_connection)
         load_scenario.clicked.connect(self._load_scenario)
         self.edit_mode.currentTextChanged.connect(self._update_canvas_tool)
         self.robot_id.valueChanged.connect(self._update_canvas_tool)
         self.team.currentIndexChanged.connect(self._update_canvas_tool)
         self.obstacle_radius.valueChanged.connect(self._update_canvas_tool)
-        clear_obstacles.clicked.connect(self._clear_obstacles)
         self.run_button.clicked.connect(self._run)
         self.stop_button.clicked.connect(self._stop)
         self.erase_button.clicked.connect(self._erase)
@@ -578,25 +620,86 @@ class ResearchConsole(QMainWindow):
         export_b.clicked.connect(lambda: self._export("b"))
 
     def _new_scenario(self) -> None:
-        name, accepted = QInputDialog.getText(self, "Plan a scenario", "Scenario name")
-        if not accepted or not name.strip():
+        self._capture_plan_snapshot()
+
+    def _field_mode_changed(self, index: int) -> None:
+        if index == 1:
+            self._capture_plan_snapshot()
+
+    def _capture_plan_snapshot(self) -> None:
+        """Start every Plan Course visit from the latest runtime feedback."""
+        snapshot = self.runtime.world_snapshot
+        if snapshot is None:
+            self.current_scenario = None
+            self.canvas.set_scenario(None)
+            self.field_tabs.blockSignals(True)
+            self.field_tabs.setCurrentIndex(1)
+            self.field_tabs.blockSignals(False)
+            self.status.setText(
+                "Plan Course is waiting for the first complete world snapshot from grSim."
+            )
             return
-        self.current_scenario = Scenario(name.strip())
+        self.current_scenario = None
+        self.canvas.set_scenario(None)
+        self.canvas.capture_world_snapshot(snapshot)
+        self.edit_mode.setCurrentText("select_live_robot")
+        self.field_tabs.blockSignals(True)
+        self.field_tabs.setCurrentIndex(1)
+        self.field_tabs.blockSignals(False)
+        count = len(self.canvas.live_robots)
+        self.status.setText(
+            f"Fresh snapshot captured ({count} robots). Click a robot to plan its course."
+        )
+
+    def _select_plan_robot(self, robot: LiveRobot) -> None:
+        obstacles = [
+            ScenarioObstacle(
+                obstacle_id=other.robot_id,
+                is_yellow=other.is_yellow,
+                position_mm=other.position_mm,
+                radius_mm=ROBOT_RADIUS_MM,
+            )
+            for other in self.canvas.live_robots.values()
+            if (other.is_yellow, other.robot_id) != (robot.is_yellow, robot.robot_id)
+        ]
+        self.current_scenario = Scenario(
+            f"snapshot_{int(time.time())}",
+            robots=[
+                ScenarioRobot(
+                    robot.robot_id,
+                    robot.is_yellow,
+                    robot.position_mm,
+                    robot.position_mm,
+                    robot.orientation_rad,
+                )
+            ],
+            obstacles=obstacles,
+        )
         self.canvas.set_scenario(self.current_scenario)
-        self.edit_mode.setCurrentText("add_robot")
-        self.status.setText("Editing scenario: click to add a robot start")
+        self.canvas.selected_robot = 0
+        self.edit_mode.setCurrentText("relocate_start")
+        self.status.setText(
+            f"Selected {'yellow' if robot.is_yellow else 'blue'} robot {robot.robot_id}. "
+            "Click its proposed start, then choose Set target and click the destination."
+        )
 
     def _save_scenario(self) -> None:
         if self.current_scenario is None or not self.current_scenario.robots:
-            QMessageBox.warning(self, "Incomplete scenario", "Add at least one robot first.")
+            QMessageBox.warning(self, "Incomplete course", "Select a robot first.")
+            return
+        robot = self.current_scenario.robots[0]
+        if robot.start_mm == robot.target_mm:
+            QMessageBox.warning(
+                self,
+                "Incomplete course",
+                "Choose Set target and click a destination before applying.",
+            )
             return
         try:
-            path = self.store.save(self.current_scenario)
-            self.runtime.apply_scenario(self.current_scenario)
+            self.runtime.apply_scenario(self.current_scenario, include_obstacles=False)
             self.send_latency.set_latency(self.runtime.last_send_latency_ms)
             self.session.scenario_forwarded()
-            self.status.setText(f"Saved and forwarded {path.name}")
-            self._refresh_scenarios()
+            self.status.setText("Plan applied to grSim; ready to generate and run the course")
             self._refresh_controls()
         except Exception as exc:
             QMessageBox.critical(self, "Scenario forwarding failed", str(exc))
@@ -662,6 +765,7 @@ class ResearchConsole(QMainWindow):
             self.session.run()
             paths = self.runtime.plan(self.current_scenario)
             self.canvas.set_paths(paths)
+            self.live_canvas.set_paths(paths)
             self.runtime.start_execution(paths)
             self.control_timer.start()
             self.recorder = ExperimentRecorder(
@@ -706,6 +810,7 @@ class ResearchConsole(QMainWindow):
             self.session.erase_plan()
             self.runtime.reset_planner()
             self.canvas.clear_paths()
+            self.live_canvas.clear_paths()
             if self.recorder is not None:
                 if not self.recorder.closed:
                     self.recorder.record("plan_erased")
@@ -723,6 +828,7 @@ class ResearchConsole(QMainWindow):
             self.session.reset()
             self.runtime.reset_planner()
             self.canvas.clear_paths()
+            self.live_canvas.clear_paths()
             if self.current_scenario is not None and self.session.has_scenario:
                 self.runtime.apply_scenario(self.current_scenario)
                 self.send_latency.set_latency(self.runtime.last_send_latency_ms)
@@ -762,7 +868,7 @@ class ResearchConsole(QMainWindow):
 
     def _control_tick(self) -> None:
         try:
-            if not self.runtime.execute_tick(self.canvas.current_live_robots()):
+            if not self.runtime.execute_tick(self.runtime.live_robots):
                 return
             self.control_timer.stop()
             self.runtime.stop_execution()
@@ -791,7 +897,15 @@ class ResearchConsole(QMainWindow):
         self.receive_latency.set_latency(latency_ms)
 
     def _live_grsim_packet_received(self, packet, latency_ms: float) -> None:
-        self.canvas.update_live_world(packet)
+        frame = self.runtime.ingest_vision_packet(packet)
+        if frame is not None:
+            self.live_canvas.update_live_frame(frame)
+            if (
+                self.field_tabs.currentIndex() == 1
+                and self.current_scenario is None
+                and not self.canvas.live_robots
+            ):
+                self._capture_plan_snapshot()
         self.runtime.last_receive_latency_ms = latency_ms
         self.receive_latency.set_latency(latency_ms)
 
