@@ -1,17 +1,22 @@
-"""Research-session state machine, planner discovery, and placeholder exports."""
+"""Research-session state, planner discovery, and measured result exports."""
 
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
-from enum import Enum
 import importlib
 import inspect
 import json
 import pkgutil
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from enum import Enum
+from math import hypot
 from pathlib import Path
+from statistics import fmean
+from time import perf_counter, process_time
 
 import research_sdk.planners as planner_package
+from research_sdk.config import ROBOT_RADIUS_MM
 
 
 class SessionState(str, Enum):
@@ -99,18 +104,122 @@ RESULT_COLUMNS_B = (
 )
 
 
-def export_placeholder_results(destination: str | Path, format_name: str) -> Path:
-    """Write headings only; metric collection is intentionally deferred."""
+@dataclass(slots=True)
+class RunMetrics:
+    """Accumulate one run's measurements using monotonic in-process clocks."""
+
+    input_latency_samples_ms: list[float] = field(default_factory=list)
+    mapping_time_samples_ms: list[float] = field(default_factory=list)
+    planner_execution_samples_ms: list[float] = field(default_factory=list)
+    number_of_fails: int = 0
+    number_of_collisions: int = 0
+    started_at: float = field(default_factory=perf_counter)
+    cpu_started_at: float = field(default_factory=process_time)
+    execution_started_at: float | None = None
+    finished_at: float | None = None
+    cpu_finished_at: float | None = None
+    robot_arrival_time_ms: float | None = None
+    _active_collision_pairs: set[tuple[tuple[bool, int], tuple[bool, int]]] = field(
+        default_factory=set, repr=False
+    )
+
+    def record_pipeline(self, input_latency_ms: float, mapping_time_ms: float) -> None:
+        self.input_latency_samples_ms.append(float(input_latency_ms))
+        self.mapping_time_samples_ms.append(float(mapping_time_ms))
+
+    def record_planning(self, durations_ms, failures: int = 0) -> None:
+        self.planner_execution_samples_ms.extend(float(value) for value in durations_ms)
+        self.number_of_fails += int(failures)
+
+    def start_execution(self, *, now: float | None = None) -> None:
+        self.execution_started_at = perf_counter() if now is None else now
+
+    def observe_robots(self, robots) -> None:
+        values = list(robots.values())
+        colliding = set()
+        for index, first in enumerate(values):
+            for second in values[index + 1 :]:
+                if (
+                    hypot(
+                        first.position_mm[0] - second.position_mm[0],
+                        first.position_mm[1] - second.position_mm[1],
+                    )
+                    <= 2.0 * ROBOT_RADIUS_MM
+                ):
+                    pair = tuple(
+                        sorted(
+                            ((first.is_yellow, first.robot_id), (second.is_yellow, second.robot_id))
+                        )
+                    )
+                    colliding.add(pair)
+        self.number_of_collisions += len(colliding - self._active_collision_pairs)
+        self._active_collision_pairs = colliding
+
+    def finish(
+        self,
+        *,
+        completed: bool,
+        now: float | None = None,
+        cpu_now: float | None = None,
+    ) -> None:
+        if self.finished_at is not None:
+            return
+        self.finished_at = perf_counter() if now is None else now
+        self.cpu_finished_at = process_time() if cpu_now is None else cpu_now
+        if completed and self.execution_started_at is not None:
+            self.robot_arrival_time_ms = (self.finished_at - self.execution_started_at) * 1000.0
+
+    @staticmethod
+    def _mean(values: list[float]) -> float | None:
+        return fmean(values) if values else None
+
+    @staticmethod
+    def _csv_value(value: float | None):
+        return "" if value is None else round(value, 6) if isinstance(value, float) else value
+
+    def row(self, format_name: str) -> dict[str, float | int | str]:
+        cpu_end = self.cpu_finished_at if self.cpu_finished_at is not None else process_time()
+        common_input = self._csv_value(self._mean(self.input_latency_samples_ms))
+        if format_name.lower() == "a":
+            return {
+                "input_latency_ms": common_input,
+                "mapping_time_ms": self._csv_value(self._mean(self.mapping_time_samples_ms)),
+                "planning_time_ms": self._csv_value(sum(self.planner_execution_samples_ms)),
+                "number_of_fails": self.number_of_fails,
+            }
+        if format_name.lower() != "b":
+            raise ValueError("Result format must be 'a' or 'b'")
+        return {
+            "input_latency_ms": common_input,
+            "average_planner_execution_time_ms": self._csv_value(
+                self._mean(self.planner_execution_samples_ms)
+            ),
+            "robot_arrival_time_ms": self._csv_value(self.robot_arrival_time_ms),
+            "total_plans_made": len(self.planner_execution_samples_ms),
+            "number_of_collisions": self.number_of_collisions,
+            "resources_used": self._csv_value((cpu_end - self.cpu_started_at) * 1000.0),
+        }
+
+
+def export_results(
+    destination: str | Path,
+    format_name: str,
+    metrics: RunMetrics,
+) -> Path:
+    """Write one fully calculated result row for a run."""
     columns = RESULT_COLUMNS_A if format_name.lower() == "a" else RESULT_COLUMNS_B
+    row = metrics.row(format_name)
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as stream:
-        csv.writer(stream).writerow(columns)
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        writer.writerow(row)
     return path
 
 
 class ExperimentRecorder:
-    """Append lifecycle events without pretending deferred metrics exist."""
+    """Record lifecycle events and the calculated metrics for one run."""
 
     def __init__(
         self,
@@ -118,17 +227,30 @@ class ExperimentRecorder:
         planner_name: str,
         folder: str | Path = "results",
     ) -> None:
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         safe_scenario = "_".join(scenario_name.strip().split()) or "scenario"
         self.folder = Path(folder) / f"{stamp}_{safe_scenario}"
         self.folder.mkdir(parents=True, exist_ok=True)
         self.path = self.folder / "events.jsonl"
         self._stream = self.path.open("a", encoding="utf-8")
+        self.metrics = RunMetrics()
         self.record("run_started", scenario=scenario_name, planner=planner_name)
+
+    def finish(self, *, completed: bool) -> None:
+        self.metrics.finish(completed=completed)
+        self.record(
+            "metrics_finalized",
+            completed=completed,
+            format_a=self.metrics.row("a"),
+            format_b=self.metrics.row("b"),
+        )
+
+    def export(self, destination: str | Path, format_name: str) -> Path:
+        return export_results(destination, format_name, self.metrics)
 
     def record(self, event: str, **payload) -> None:
         row = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "event": event,
             **payload,
         }

@@ -15,7 +15,7 @@ from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.ssl_sockets import grSimSender
 from research_sdk.planners import PlannerAPI, PlannerInput
 from research_sdk.ui.scenarios import Scenario
-from research_sdk.world.pipeline import VisionWorldPipeline
+from research_sdk.world.pipeline import VisionWorldPipeline, WorldPipelineUpdate
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
 from research_sdk.world.snapshot import WorldSnapshot
 
@@ -110,6 +110,9 @@ class ResearchRuntime:
         self._planner = PlannerAPI()
         self.last_send_latency_ms: float | None = None
         self.last_receive_latency_ms: float | None = None
+        self.last_pipeline_update: WorldPipelineUpdate | None = None
+        self.last_plan_durations_ms: tuple[float, ...] = ()
+        self.last_plan_failures = 0
         self.world_pipeline = VisionWorldPipeline(cameras=4)
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
@@ -118,6 +121,7 @@ class ResearchRuntime:
     def ingest_vision_packet(self, packet) -> LiveWorldFrame | None:
         """Update the runtime's world-state boundary from one vision packet."""
         update = self.world_pipeline.ingest(packet)
+        self.last_pipeline_update = update
         return None if update is None else live_world_from_snapshot(update.snapshot)
 
     @property
@@ -169,6 +173,9 @@ class ResearchRuntime:
 
     def plan(self, scenario: Scenario) -> tuple[PlannedRobotPath, ...]:
         paths = []
+        durations_ms: list[float] = []
+        self.last_plan_durations_ms = ()
+        self.last_plan_failures = 0
         for robot in scenario.robots:
             obstacles = tuple(
                 PlanningObstacle(
@@ -190,19 +197,28 @@ class ResearchRuntime:
                 if other != robot
             )
             scene = PlanningScene(timestamp=perf_counter(), obstacles=obstacles)
-            result = self._planner.plan(
-                PlannerInput(
-                    robot_id=robot.robot_id,
-                    is_yellow=robot.is_yellow,
-                    current_pose=(*robot.start_mm, robot.orientation_rad),
-                    target_pose=(*robot.target_mm, robot.orientation_rad),
-                    scene=scene,
+            started = perf_counter()
+            try:
+                result = self._planner.plan(
+                    PlannerInput(
+                        robot_id=robot.robot_id,
+                        is_yellow=robot.is_yellow,
+                        current_pose=(*robot.start_mm, robot.orientation_rad),
+                        target_pose=(*robot.target_mm, robot.orientation_rad),
+                        scene=scene,
+                    )
                 )
-            )
+            except Exception:
+                self.last_plan_failures += 1
+                raise
+            finally:
+                durations_ms.append((perf_counter() - started) * 1000.0)
+                self.last_plan_durations_ms = tuple(durations_ms)
             points = [robot.start_mm, *[(p[0], p[1]) for p in result.waypoints]]
             if points[-1] != robot.target_mm:
                 points.append(robot.target_mm)
             paths.append(PlannedRobotPath(robot.robot_id, robot.is_yellow, tuple(points)))
+        self.last_plan_durations_ms = tuple(durations_ms)
         return tuple(paths)
 
     def reset_planner(self) -> None:
@@ -230,10 +246,13 @@ class ResearchRuntime:
             while index < len(path.points_mm):
                 target = path.points_mm[index]
                 threshold_mm = 60.0 if index == len(path.points_mm) - 1 else 120.0
-                if hypot(
-                    target[0] - robot.position_mm[0],
-                    target[1] - robot.position_mm[1],
-                ) > threshold_mm:
+                if (
+                    hypot(
+                        target[0] - robot.position_mm[0],
+                        target[1] - robot.position_mm[1],
+                    )
+                    > threshold_mm
+                ):
                     break
                 index += 1
             self._waypoint_indices[key] = index
@@ -241,9 +260,7 @@ class ResearchRuntime:
                 self._send_stop(key)
                 continue
             all_arrived = False
-            self._get_sender().send_robot_command(
-                waypoint_command(robot, path.points_mm[index])
-            )
+            self._get_sender().send_robot_command(waypoint_command(robot, path.points_mm[index]))
         return all_arrived
 
     def stop_execution(self) -> None:
@@ -255,9 +272,7 @@ class ResearchRuntime:
 
     def _send_stop(self, key: tuple[bool, int]) -> None:
         is_yellow, robot_id = key
-        self._get_sender().send_robot_command(
-            RobotCommand(robot_id=robot_id, isYellow=is_yellow)
-        )
+        self._get_sender().send_robot_command(RobotCommand(robot_id=robot_id, isYellow=is_yellow))
 
     def test_grsim_connection(self) -> ConnectionProbe:
         """Verify that the configured UDP destination is routable locally.

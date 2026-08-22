@@ -1,3 +1,5 @@
+import pytest
+
 from research_sdk.config import GRSIM_COMMAND_IP, GRSIM_COMMAND_PORT
 from research_sdk.network.proto2 import ssl_vision_wrapper_pb2
 from research_sdk.process_workers.vision_runner import VisionFrameAssembler
@@ -7,6 +9,7 @@ from research_sdk.ui.runtime import (
     live_world_from_vision_packet,
     waypoint_command,
 )
+from research_sdk.ui.scenarios import Scenario, ScenarioRobot
 from research_sdk.world.snapshot import world_snapshot_from_frame
 
 
@@ -169,3 +172,23 @@ def test_waypoint_command_uses_robot_speed_clamping() -> None:
 
     assert command.vx == 2.0
     assert command.vy == 0.0
+
+
+def test_runtime_records_failed_planner_invocation() -> None:
+    class FailingPlanner:
+        def plan(self, _planner_input):
+            raise RuntimeError("no route")
+
+    runtime = ResearchRuntime()
+    runtime._planner = FailingPlanner()
+    scenario = Scenario(
+        "blocked",
+        robots=[ScenarioRobot(1, True, (0.0, 0.0), (1000.0, 0.0))],
+    )
+
+    with pytest.raises(RuntimeError, match="no route"):
+        runtime.plan(scenario)
+
+    assert runtime.last_plan_failures == 1
+    assert len(runtime.last_plan_durations_ms) == 1
+    assert runtime.last_plan_durations_ms[0] >= 0.0

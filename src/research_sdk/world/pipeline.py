@@ -48,6 +48,7 @@ class WorldPipelineUpdate:
     snapshot: WorldSnapshot
     planning_scene: PlanningScene
     processing_latency_ms: float
+    mapping_time_ms: float
     frame_assembly_latency_ms: float
 
 
@@ -83,8 +84,10 @@ class VisionWorldPipeline:
         snapshot = world_snapshot_from_frame(frame, version=version)
         self.store.publish(snapshot)
         received_at_s = time()
+        mapping_started_ns = perf_counter_ns()
         self.world_map.update(snapshot, received_at_s=received_at_s)
         scene = self.world_map.planning_scene(now_s=received_at_s)
+        mapping_finished_ns = perf_counter_ns()
         self.latest_scene = scene
         finished_ns = perf_counter_ns()
         processing_latency_ms = (finished_ns - entered_ns) / 1_000_000.0
@@ -94,6 +97,7 @@ class VisionWorldPipeline:
             snapshot=snapshot,
             planning_scene=scene,
             processing_latency_ms=processing_latency_ms,
+            mapping_time_ms=(mapping_finished_ns - mapping_started_ns) / 1_000_000.0,
             frame_assembly_latency_ms=frame_assembly_latency_ms,
         )
 

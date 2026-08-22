@@ -4,6 +4,7 @@ import pytest
 
 from research_sdk.ui.scenarios import (
     Scenario,
+    ScenarioBall,
     ScenarioObstacle,
     ScenarioRobot,
     ScenarioStore,
@@ -12,10 +13,11 @@ from research_sdk.ui.session import (
     RESULT_COLUMNS_A,
     RESULT_COLUMNS_B,
     ExperimentRecorder,
+    RunMetrics,
     SessionController,
     SessionState,
     discover_planners,
-    export_placeholder_results,
+    export_results,
 )
 
 
@@ -27,6 +29,7 @@ def test_scenario_json_round_trip(tmp_path) -> None:
             ScenarioRobot(2, False, (0.0, -1000.0), (0.0, 1000.0)),
         ],
         obstacles=[ScenarioObstacle(15, False, (0.0, 0.0), 120.0)],
+        ball=ScenarioBall((250.0, -125.0), (10.0, 20.0)),
     )
     store = ScenarioStore(tmp_path)
 
@@ -37,15 +40,26 @@ def test_scenario_json_round_trip(tmp_path) -> None:
     assert loaded == scenario
 
 
+def test_scenario_store_updates_existing_file_without_renaming(tmp_path) -> None:
+    store = ScenarioStore(tmp_path)
+    scenario = Scenario("original", robots=[ScenarioRobot(1, True, (0, 0), (1, 1))])
+    path = store.save(scenario)
+    scenario.name = "renamed inside file"
+    scenario.ball = ScenarioBall((50.0, 75.0))
+
+    updated = store.update(path, scenario)
+
+    assert updated == path
+    assert updated.name == "original.json"
+    assert store.load(updated).name == "renamed inside file"
+    assert store.load(updated).ball.position_mm == (50.0, 75.0)
+
+
 def test_setting_same_team_robot_moves_instead_of_duplicating() -> None:
     scenario = Scenario("move robot")
 
-    first_index = scenario.set_robot(
-        ScenarioRobot(1, True, (-1000.0, 0.0), (1000.0, 0.0))
-    )
-    moved_index = scenario.set_robot(
-        ScenarioRobot(1, True, (-500.0, 250.0), (1000.0, 0.0))
-    )
+    first_index = scenario.set_robot(ScenarioRobot(1, True, (-1000.0, 0.0), (1000.0, 0.0)))
+    moved_index = scenario.set_robot(ScenarioRobot(1, True, (-500.0, 250.0), (1000.0, 0.0)))
     scenario.set_robot(ScenarioRobot(1, False, (0.0, 0.0), (0.0, 0.0)))
 
     assert first_index == moved_index == 0
@@ -109,16 +123,50 @@ def test_session_control_lifecycle_and_guards() -> None:
     ("format_name", "columns"),
     (("a", RESULT_COLUMNS_A), ("b", RESULT_COLUMNS_B)),
 )
-def test_placeholder_result_export_writes_headings_only(
+def test_result_export_writes_calculated_values(
     tmp_path,
     format_name,
     columns,
 ) -> None:
-    path = export_placeholder_results(tmp_path / f"result_{format_name}.csv", format_name)
+    metrics = RunMetrics(started_at=10.0, cpu_started_at=4.0)
+    metrics.record_pipeline(2.0, 1.0)
+    metrics.record_pipeline(4.0, 3.0)
+    metrics.record_planning((5.0, 15.0), failures=1)
+    metrics.start_execution(now=20.0)
+    metrics.finish(completed=True, now=21.25, cpu_now=4.025)
+    path = export_results(tmp_path / f"result_{format_name}.csv", format_name, metrics)
 
     with path.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.reader(stream))
-    assert rows == [list(columns)]
+        rows = list(csv.DictReader(stream))
+    assert tuple(rows[0]) == columns
+    assert rows[0]["input_latency_ms"] == "3.0"
+    if format_name == "a":
+        assert rows[0]["mapping_time_ms"] == "2.0"
+        assert rows[0]["planning_time_ms"] == "20.0"
+        assert rows[0]["number_of_fails"] == "1"
+    else:
+        assert rows[0]["average_planner_execution_time_ms"] == "10.0"
+        assert rows[0]["robot_arrival_time_ms"] == "1250.0"
+        assert rows[0]["total_plans_made"] == "2"
+        assert rows[0]["resources_used"] == "25.0"
+
+
+def test_collision_metric_counts_episodes_not_control_ticks() -> None:
+    from research_sdk.ui.runtime import LiveRobot
+
+    metrics = RunMetrics()
+    touching = {
+        (True, 1): LiveRobot(1, True, (0.0, 0.0), 0.0),
+        (False, 2): LiveRobot(2, False, (100.0, 0.0), 0.0),
+    }
+    metrics.observe_robots(touching)
+    metrics.observe_robots(touching)
+    touching[(False, 2)] = LiveRobot(2, False, (1000.0, 0.0), 0.0)
+    metrics.observe_robots(touching)
+    touching[(False, 2)] = LiveRobot(2, False, (100.0, 0.0), 0.0)
+    metrics.observe_robots(touching)
+
+    assert metrics.number_of_collisions == 2
 
 
 def test_current_planner_is_discoverable() -> None:
@@ -129,8 +177,10 @@ def test_current_planner_is_discoverable() -> None:
 def test_experiment_recorder_writes_lifecycle_events(tmp_path) -> None:
     recorder = ExperimentRecorder("demo", "Voronoi", tmp_path)
     recorder.record("plans_generated", robots=2)
+    recorder.finish(completed=False)
     recorder.close()
 
     lines = recorder.path.read_text(encoding="utf-8").splitlines()
     assert '"event":"run_started"' in lines[0]
     assert '"event":"plans_generated"' in lines[1]
+    assert '"event":"metrics_finalized"' in lines[2]

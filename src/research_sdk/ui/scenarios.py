@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
 import json
-from pathlib import Path
 import re
-
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 Point = tuple[float, float]
 
@@ -80,7 +79,7 @@ class Scenario:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "Scenario":
+    def from_dict(cls, payload: dict) -> Scenario:
         return cls(
             name=str(payload["name"]),
             robots=[

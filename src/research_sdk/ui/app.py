@@ -60,7 +60,6 @@ from research_sdk.ui.session import (
     SessionController,
     SessionState,
     discover_planners,
-    export_placeholder_results,
 )
 
 CONFIG_FOLDER = Path(__file__).resolve().parents[1] / "config"
@@ -835,17 +834,24 @@ class ResearchConsole(QMainWindow):
     def _run(self) -> None:
         if self.current_scenario is None:
             return
+        self.recorder = ExperimentRecorder(
+            self.current_scenario.name,
+            self.planner_selector.currentText(),
+        )
+        planning_recorded = False
         try:
             self.session.run()
             paths = self.runtime.plan(self.current_scenario)
+            self.recorder.metrics.record_planning(
+                self.runtime.last_plan_durations_ms,
+                self.runtime.last_plan_failures,
+            )
+            planning_recorded = True
             self.canvas.set_paths(paths)
             self.live_canvas.set_paths(paths)
             self.runtime.start_execution(paths)
+            self.recorder.metrics.start_execution()
             self.control_timer.start()
-            self.recorder = ExperimentRecorder(
-                self.current_scenario.name,
-                self.planner_selector.currentText(),
-            )
             self.recorder.record(
                 "plans_generated",
                 robots=[
@@ -862,6 +868,15 @@ class ResearchConsole(QMainWindow):
             )
             self._refresh_controls()
         except Exception as exc:
+            if not planning_recorded:
+                self.recorder.metrics.record_planning(
+                    self.runtime.last_plan_durations_ms,
+                    self.runtime.last_plan_failures,
+                )
+            self.recorder.finish(completed=False)
+            self.recorder.close()
+            if self.session.state is SessionState.RUNNING:
+                self.session.stop()
             QMessageBox.critical(self, "Cannot run scenario", str(exc))
 
     def _stop(self) -> None:
@@ -871,6 +886,7 @@ class ResearchConsole(QMainWindow):
             self.session.stop()
             if self.recorder is not None:
                 self.recorder.record("run_stopped")
+                self.recorder.finish(completed=False)
                 self.recorder.close()
             self.status.setText("Stopped · plan retained")
             self._refresh_controls()
@@ -888,6 +904,7 @@ class ResearchConsole(QMainWindow):
             if self.recorder is not None:
                 if not self.recorder.closed:
                     self.recorder.record("plan_erased")
+                    self.recorder.finish(completed=False)
                     self.recorder.close()
                 self.recorder = None
             self.status.setText("Active plan erased")
@@ -942,13 +959,17 @@ class ResearchConsole(QMainWindow):
 
     def _control_tick(self) -> None:
         try:
-            if not self.runtime.execute_tick(self.runtime.live_robots):
+            live_robots = self.runtime.live_robots
+            if self.recorder is not None and not self.recorder.closed:
+                self.recorder.metrics.observe_robots(live_robots)
+            if not self.runtime.execute_tick(live_robots):
                 return
             self.control_timer.stop()
             self.runtime.stop_execution()
             self.session.stop()
             if self.recorder is not None and not self.recorder.closed:
                 self.recorder.record("robots_arrived")
+                self.recorder.finish(completed=True)
                 self.recorder.close()
             self.status.setText("Completed · all robots reached their targets")
             self._refresh_controls()
@@ -962,6 +983,10 @@ class ResearchConsole(QMainWindow):
                 self.session.stop()
             except Exception:
                 pass
+            if self.recorder is not None and not self.recorder.closed:
+                self.recorder.record("execution_failed", error=str(exc))
+                self.recorder.finish(completed=False)
+                self.recorder.close()
             self.status.setText(f"Execution stopped: {exc}")
             self._refresh_controls()
 
@@ -972,6 +997,12 @@ class ResearchConsole(QMainWindow):
 
     def _live_grsim_packet_received(self, packet, latency_ms: float) -> None:
         frame = self.runtime.ingest_vision_packet(packet)
+        update = self.runtime.last_pipeline_update
+        if update is not None and self.recorder is not None and not self.recorder.closed:
+            self.recorder.metrics.record_pipeline(
+                update.processing_latency_ms,
+                update.mapping_time_ms,
+            )
         if frame is not None:
             self.live_canvas.update_live_frame(frame)
             if (
@@ -994,8 +1025,11 @@ class ResearchConsole(QMainWindow):
             "CSV files (*.csv)",
         )
         if destination:
-            path = export_placeholder_results(destination, format_name)
-            self.status.setText(f"Exported placeholder result headings to {path}")
+            if self.recorder is None:
+                QMessageBox.warning(self, "No results", "Run an experiment before exporting.")
+                return
+            path = self.recorder.export(destination, format_name)
+            self.status.setText(f"Exported measured result data to {path}")
 
     def _refresh_controls(self) -> None:
         state = self.session.state
@@ -1030,6 +1064,8 @@ class ResearchConsole(QMainWindow):
         if self.display_vision_thread is not None:
             self.display_vision_thread.stop()
         if self.recorder is not None:
+            if not self.recorder.closed:
+                self.recorder.finish(completed=False)
             self.recorder.close()
         event.accept()
 

@@ -43,6 +43,7 @@ def test_packets_flow_to_snapshot_and_planner_scene() -> None:
     assert pipeline.store.current is update.snapshot
     assert pipeline.latest_scene is update.planning_scene
     assert update.processing_latency_ms >= 0.0
+    assert 0.0 <= update.mapping_time_ms <= update.processing_latency_ms
     assert update.frame_assembly_latency_ms >= update.processing_latency_ms
 
 
