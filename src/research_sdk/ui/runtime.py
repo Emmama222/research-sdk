@@ -13,7 +13,7 @@ from research_sdk.config import ROBOT_RADIUS_MM
 from research_sdk.network.grSimPacketFactory import grSimPacketFactory
 from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.ssl_sockets import grSimSender
-from research_sdk.planners import PlannerAPI, PlannerInput
+from research_sdk.planners import PlannerAPI, PlannerInput, VoronoiDijkstraPlanner
 from research_sdk.ui.scenarios import Scenario
 from research_sdk.world.pipeline import VisionWorldPipeline, WorldPipelineUpdate
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
@@ -220,6 +220,20 @@ class ResearchRuntime:
             paths.append(PlannedRobotPath(robot.robot_id, robot.is_yellow, tuple(points)))
         self.last_plan_durations_ms = tuple(durations_ms)
         return tuple(paths)
+
+    def set_planner(self, planner_cls: type | None) -> None:
+        """Swap the active planner, e.g. from the UI's "Active planner" dropdown.
+
+        ``VoronoiDijkstraPlanner`` is discoverable but implements a different,
+        lower-level ``.plan(scene, start, target, ...)`` signature (it is
+        VoronoiWaypointManager's internal building block, not itself a
+        PlannerAPI-shaped planner) -- selecting it maps back onto the default
+        ``PlannerAPI()`` rather than instantiating it directly.
+        """
+        if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
+            self._planner = PlannerAPI()
+        else:
+            self._planner = planner_cls()
 
     def reset_planner(self) -> None:
         self._planner.reset()

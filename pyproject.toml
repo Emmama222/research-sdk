@@ -11,10 +11,14 @@ dependencies = [
     "mcp>=2.0",
     "protobuf>=5.0",
     "PyYAML>=6.0",
+    "numpy>=1.26",
+    "networkx>=3.2",
 ]
 
 [project.optional-dependencies]
 parquet = ["pyarrow>=16.0"]
+# matplotlib: side-by-side comparison plot in scripts/demo_planners.py.
+demo = ["matplotlib>=3.8"]
 dev = ["pytest>=8.0", "ruff>=0.6", "grpcio-tools>=1.60"]
 
 [project.scripts]

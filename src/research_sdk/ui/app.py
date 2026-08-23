@@ -572,7 +572,11 @@ class ResearchConsole(QMainWindow):
 
         self.planner_selector = QComboBox()
         planners = discover_planners()
-        self.planner_selector.addItems(planners or {"No planners discovered": object})
+        if planners:
+            for label, planner_cls in planners.items():
+                self.planner_selector.addItem(label, planner_cls)
+        else:
+            self.planner_selector.addItem("No planners discovered", None)
         form.addRow("Active planner", self.planner_selector)
 
         self.run_button = QPushButton("Run")
@@ -834,6 +838,7 @@ class ResearchConsole(QMainWindow):
     def _run(self) -> None:
         if self.current_scenario is None:
             return
+        self.runtime.set_planner(self.planner_selector.currentData())
         self.recorder = ExperimentRecorder(
             self.current_scenario.name,
             self.planner_selector.currentText(),
