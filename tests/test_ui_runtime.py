@@ -1,7 +1,12 @@
 import pytest
 
-from research_sdk.config import GRSIM_COMMAND_IP, GRSIM_COMMAND_PORT
+from research_sdk.config import (
+    GRSIM_COMMAND_IP,
+    GRSIM_COMMAND_PORT,
+    ROBOT_MAX_LINEAR_SPEED_MPS,
+)
 from research_sdk.network.proto2 import ssl_vision_wrapper_pb2
+from research_sdk.planners import PlannerOutput
 from research_sdk.process_workers.vision_runner import VisionFrameAssembler
 from research_sdk.ui.runtime import (
     LiveRobot,
@@ -9,7 +14,7 @@ from research_sdk.ui.runtime import (
     live_world_from_vision_packet,
     waypoint_command,
 )
-from research_sdk.ui.scenarios import Scenario, ScenarioRobot
+from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot
 from research_sdk.world.snapshot import world_snapshot_from_frame
 
 
@@ -170,7 +175,7 @@ def test_waypoint_command_uses_robot_speed_clamping() -> None:
 
     command = waypoint_command(robot, (10000.0, 0.0))
 
-    assert command.vx == 2.0
+    assert command.vx == ROBOT_MAX_LINEAR_SPEED_MPS
     assert command.vy == 0.0
 
 
@@ -192,3 +197,43 @@ def test_runtime_records_failed_planner_invocation() -> None:
     assert runtime.last_plan_failures == 1
     assert len(runtime.last_plan_durations_ms) == 1
     assert runtime.last_plan_durations_ms[0] >= 0.0
+
+
+def test_runtime_only_supplies_obstacles_for_selected_algorithm() -> None:
+    class CapturingPlanner:
+        received_obstacles = ()
+
+        def plan(self, planner_input):
+            type(self).received_obstacles = planner_input.scene.obstacles
+            return PlannerOutput(
+                waypoints=(),
+                current_waypoint_index=0,
+                active_target_pose=planner_input.target_pose,
+                is_path_free=True,
+                need_reroute=False,
+                did_reroute=False,
+            )
+
+        def reset(self):
+            pass
+
+    selected_key = f"{CapturingPlanner.__module__}.{CapturingPlanner.__qualname__}"
+    scenario = Scenario(
+        "planner layouts",
+        robots=[ScenarioRobot(1, True, (0.0, 0.0), (1000.0, 0.0))],
+        obstacles=[
+            ScenarioObstacle(2, False, (100.0, 0.0), 90.0),
+            ScenarioObstacle(
+                3, False, (200.0, 0.0), 90.0, planner_keys=(selected_key,)
+            ),
+            ScenarioObstacle(
+                4, False, (300.0, 0.0), 90.0, planner_keys=("other.Planner",)
+            ),
+        ],
+    )
+    runtime = ResearchRuntime()
+    runtime.set_planner(CapturingPlanner)
+
+    runtime.plan(scenario)
+
+    assert tuple(obstacle.robot_id for obstacle in CapturingPlanner.received_obstacles) == (2, 3)

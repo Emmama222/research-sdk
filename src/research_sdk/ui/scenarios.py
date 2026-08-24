@@ -32,6 +32,15 @@ class ScenarioObstacle:
     position_mm: Point
     radius_mm: float
     velocity_mmps: Point = (0.0, 0.0)
+    planner_keys: tuple[str, ...] = ()
+
+    def applies_to(self, planner_key: str | None) -> bool:
+        """Return whether this obstacle belongs to the selected algorithm.
+
+        Older scenarios have no ``planner_keys`` and therefore remain shared
+        by every planner.
+        """
+        return not self.planner_keys or planner_key in self.planner_keys
 
 
 @dataclass(slots=True)
@@ -40,7 +49,7 @@ class Scenario:
     robots: list[ScenarioRobot] = field(default_factory=list)
     obstacles: list[ScenarioObstacle] = field(default_factory=list)
     ball: ScenarioBall | None = None
-    schema_version: int = 2
+    schema_version: int = 3
 
     def set_robot(self, robot: ScenarioRobot) -> int:
         """Insert or move the single robot identified by team and robot ID."""
@@ -58,15 +67,16 @@ class Scenario:
         return len(self.robots) - 1
 
     def set_obstacle(self, obstacle: ScenarioObstacle) -> int:
-        """Insert or move one grSim obstacle robot, keeping identities unique."""
-        key = (obstacle.is_yellow, obstacle.obstacle_id)
+        """Insert or move an obstacle within one planner-specific layout."""
+        identity = (obstacle.is_yellow, obstacle.obstacle_id)
+        key = (*identity, obstacle.planner_keys)
         self.robots[:] = [
             robot
             for robot in self.robots
-            if (robot.is_yellow, robot.robot_id) != key
+            if (robot.is_yellow, robot.robot_id) != identity
         ]
         for index, current in enumerate(self.obstacles):
-            if (current.is_yellow, current.obstacle_id) == key:
+            if (current.is_yellow, current.obstacle_id, current.planner_keys) == key:
                 self.obstacles[index] = obstacle
                 return index
         self.obstacles.append(obstacle)
@@ -74,6 +84,12 @@ class Scenario:
 
     def clear_obstacles(self) -> None:
         self.obstacles.clear()
+
+    def obstacles_for(self, planner_key: str | None) -> tuple[ScenarioObstacle, ...]:
+        """Return shared obstacles plus those assigned to ``planner_key``."""
+        return tuple(
+            obstacle for obstacle in self.obstacles if obstacle.applies_to(planner_key)
+        )
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -99,6 +115,7 @@ class Scenario:
                     position_mm=tuple(obstacle["position_mm"]),
                     radius_mm=float(obstacle["radius_mm"]),
                     velocity_mmps=tuple(obstacle.get("velocity_mmps", (0.0, 0.0))),
+                    planner_keys=tuple(str(key) for key in obstacle.get("planner_keys", ())),
                 )
                 for obstacle in payload.get("obstacles", ())
             ],

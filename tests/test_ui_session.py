@@ -17,6 +17,7 @@ from research_sdk.ui.session import (
     SessionController,
     SessionState,
     discover_planners,
+    export_planner_results,
     export_results,
 )
 
@@ -28,7 +29,15 @@ def test_scenario_json_round_trip(tmp_path) -> None:
             ScenarioRobot(1, True, (-1000.0, 0.0), (1000.0, 0.0)),
             ScenarioRobot(2, False, (0.0, -1000.0), (0.0, 1000.0)),
         ],
-        obstacles=[ScenarioObstacle(15, False, (0.0, 0.0), 120.0)],
+        obstacles=[
+            ScenarioObstacle(
+                15,
+                False,
+                (0.0, 0.0),
+                120.0,
+                planner_keys=("example.PRMPlanner",),
+            )
+        ],
         ball=ScenarioBall((250.0, -125.0), (10.0, 20.0)),
     )
     store = ScenarioStore(tmp_path)
@@ -38,6 +47,17 @@ def test_scenario_json_round_trip(tmp_path) -> None:
 
     assert path.name == "two_robots.json"
     assert loaded == scenario
+
+
+def test_scenario_filters_shared_and_algorithm_specific_obstacles() -> None:
+    shared = ScenarioObstacle(1, False, (0.0, 0.0), 90.0)
+    prm_only = ScenarioObstacle(
+        2, False, (100.0, 0.0), 90.0, planner_keys=("example.PRMPlanner",)
+    )
+    scenario = Scenario("layouts", obstacles=[shared, prm_only])
+
+    assert scenario.obstacles_for("example.PRMPlanner") == (shared, prm_only)
+    assert scenario.obstacles_for("example.VisibilityGraphPlanner") == (shared,)
 
 
 def test_scenario_store_updates_existing_file_without_renaming(tmp_path) -> None:
@@ -117,6 +137,18 @@ def test_session_control_lifecycle_and_guards() -> None:
     assert not session.has_plan
     session.reset()
     assert session.state is SessionState.AFTER_RESET
+    assert not session.has_scenario
+
+
+def test_session_can_reset_a_forwarded_course_before_running() -> None:
+    session = SessionController()
+    session.scenario_forwarded()
+
+    session.reset()
+
+    assert session.state is SessionState.AFTER_RESET
+    assert not session.has_scenario
+    assert not session.has_plan
 
 
 @pytest.mark.parametrize(
@@ -149,6 +181,24 @@ def test_result_export_writes_calculated_values(
         assert rows[0]["robot_arrival_time_ms"] == "1250.0"
         assert rows[0]["total_plans_made"] == "2"
         assert rows[0]["resources_used"] == "25.0"
+
+
+def test_planner_comparison_export_writes_one_labeled_row_per_planner(tmp_path) -> None:
+    first = RunMetrics()
+    first.record_planning((1.0,))
+    second = RunMetrics()
+    second.record_planning((2.0,))
+
+    path = export_planner_results(
+        tmp_path / "comparison.csv",
+        "a",
+        {"PRM": first, "Visibility Graph": second},
+    )
+
+    with path.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream))
+    assert [row["planner"] for row in rows] == ["PRM", "Visibility Graph"]
+    assert [row["planning_time_ms"] for row in rows] == ["1.0", "2.0"]
 
 
 def test_collision_metric_counts_episodes_not_control_ticks() -> None:

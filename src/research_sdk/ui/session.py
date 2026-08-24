@@ -55,8 +55,9 @@ class SessionController:
         self.has_plan = False
 
     def reset(self) -> None:
-        if self.state not in (SessionState.STOPPED, SessionState.AFTER_RESET):
+        if self.state is SessionState.RUNNING:
             raise RuntimeError("Stop the session before resetting")
+        self.has_scenario = False
         self.has_plan = False
         self.state = SessionState.AFTER_RESET
 
@@ -93,6 +94,8 @@ RESULT_COLUMNS_A = (
     "planning_time_ms",
     "number_of_fails",
 )
+
+PLANNER_RESULT_COLUMN = "planner"
 
 RESULT_COLUMNS_B = (
     "input_latency_ms",
@@ -215,6 +218,24 @@ def export_results(
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerow(row)
+    return path
+
+
+def export_planner_results(
+    destination: str | Path,
+    format_name: str,
+    planner_metrics: dict[str, RunMetrics],
+) -> Path:
+    """Write one labeled result row per planner from a comparison run."""
+    result_columns = RESULT_COLUMNS_A if format_name.lower() == "a" else RESULT_COLUMNS_B
+    columns = (PLANNER_RESULT_COLUMN, *result_columns)
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        for planner_name, metrics in planner_metrics.items():
+            writer.writerow({PLANNER_RESULT_COLUMN: planner_name, **metrics.row(format_name)})
     return path
 
 

@@ -104,10 +104,18 @@ def waypoint_command(
     )
 
 
+def planner_key(planner_cls: type | None) -> str | None:
+    """Return the persistent identifier used by scenario obstacle layouts."""
+    if planner_cls is None:
+        return None
+    return f"{planner_cls.__module__}.{planner_cls.__qualname__}"
+
+
 class ResearchRuntime:
     def __init__(self) -> None:
         self._sender: grSimSender | None = None
         self._planner = PlannerAPI()
+        self._planner_key: str | None = None
         self.last_send_latency_ms: float | None = None
         self.last_receive_latency_ms: float | None = None
         self.last_pipeline_update: WorldPipelineUpdate | None = None
@@ -164,7 +172,7 @@ class ResearchRuntime:
                     "robot_id": obstacle.obstacle_id,
                     "isYellow": obstacle.is_yellow,
                 }
-                for obstacle in scenario.obstacles
+                for obstacle in scenario.obstacles_for(self._planner_key)
             )
         packet = grSimPacketFactory.scenario_replacement_command(replacements)
         started = perf_counter()
@@ -185,7 +193,7 @@ class ResearchRuntime:
                     radius_mm=obstacle.radius_mm,
                     vel_mmps=obstacle.velocity_mmps,
                 )
-                for obstacle in scenario.obstacles
+                for obstacle in scenario.obstacles_for(self._planner_key)
             ) + tuple(
                 PlanningObstacle(
                     robot_id=other.robot_id,
@@ -230,6 +238,7 @@ class ResearchRuntime:
         PlannerAPI-shaped planner) -- selecting it maps back onto the default
         ``PlannerAPI()`` rather than instantiating it directly.
         """
+        self._planner_key = planner_key(planner_cls)
         if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
             self._planner = PlannerAPI()
         else:
