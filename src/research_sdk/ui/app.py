@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import replace
-from math import cos, sin
+from dataclasses import dataclass, replace
+from math import cos, hypot, pi, sin
 from pathlib import Path
 
 import yaml
@@ -17,9 +17,12 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
@@ -28,6 +31,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QTabWidget,
     QToolBar,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -42,6 +46,7 @@ from research_sdk.config import (
     ROBOT_RADIUS_MM,
 )
 from research_sdk.network.ssl_sockets import Vision, grSimVision
+from research_sdk.planners.common import StepRecorder
 from research_sdk.ui.runtime import (
     LiveRobot,
     PlannedRobotPath,
@@ -64,6 +69,8 @@ from research_sdk.ui.session import (
     discover_planners,
     export_planner_results,
 )
+from research_sdk.world.map.voronoi.voronoi_generator import generate_bounded_voronoi_map
+from research_sdk.world.scene import PlanningObstacle
 
 CONFIG_FOLDER = Path(__file__).resolve().parents[1] / "config"
 EDITABLE_CONFIGS = (
@@ -313,16 +320,17 @@ class FieldCanvas(QWidget):
 
     def _draw_robot(self, painter: QPainter, robot: ScenarioRobot, selected: bool) -> None:
         start = self._to_screen(robot.start_mm)
-        target = self._to_screen(robot.target_mm)
         radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
         color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
         painter.setBrush(QColor(color.red(), color.green(), color.blue(), 75))
         painter.setPen(QPen(QColor("white") if selected else color, 3 if selected else 2, Qt.DashLine))
         painter.drawEllipse(start, radius, radius)
-        painter.setBrush(Qt.NoBrush)
-        painter.setPen(QPen(color, 2, Qt.DashLine))
-        painter.drawEllipse(target, radius, radius)
-        painter.drawLine(start, target)
+        if robot.target_mm is not None:
+            target = self._to_screen(robot.target_mm)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(color, 2, Qt.DashLine))
+            painter.drawEllipse(target, radius, radius)
+            painter.drawLine(start, target)
         painter.setPen(QColor("#101820"))
         painter.drawText(start + QPointF(-4, 5), str(robot.robot_id))
 
@@ -368,7 +376,7 @@ class FieldCanvas(QWidget):
                 ),
                 None,
             )
-            target = existing.target_mm if existing is not None else point
+            target = existing.target_mm if existing is not None else None
             self.selected_robot = self.scenario.set_robot(
                 ScenarioRobot(self.robot_id, self.robot_yellow, point, target)
             )
@@ -411,6 +419,297 @@ class FieldCanvas(QWidget):
             return None
         distance, index = min(candidates)
         return index if distance < 35 else None
+
+
+@dataclass(frozen=True, slots=True)
+class PlannerPreview:
+    paths: tuple[PlannedRobotPath, ...]
+    map_time_ms: float
+    planning_time_ms: float
+    nodes: tuple[tuple[float, float], ...] = ()
+    edges: tuple[tuple[tuple[float, float], tuple[float, float]], ...] = ()
+
+
+class ScenarioPlannerCanvas(FieldCanvas):
+    """Interactive field editor and layered preview for the new workspace."""
+
+    selection_changed = Signal()
+    edit_committed = Signal(str)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMouseTracking(True)
+        self.mode = "starting_pos"
+        self.selected_obstacle: int | None = None
+        self.cursor_mm: tuple[float, float] | None = None
+        self.show_map_layer = True
+        self.show_robot_layer = True
+        self.show_shape_layer = True
+        self.show_path_layer = True
+        self.preview = PlannerPreview((), 0.0, 0.0)
+        self.planner_label = ""
+
+    def set_preview(self, preview: PlannerPreview, planner_label: str) -> None:
+        self.preview = preview
+        self.planner_label = planner_label
+        self.set_paths(preview.paths)
+
+    def clear_preview(self) -> None:
+        self.preview = PlannerPreview((), 0.0, 0.0)
+        self.clear_paths()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._field_rect().contains(event.position()):
+            self.cursor_mm = self._to_world(event.position())
+            path = self._nearest_path(event.position())
+            if path is not None:
+                length = sum(
+                    hypot(b[0] - a[0], b[1] - a[1])
+                    for a, b in zip(path.points_mm, path.points_mm[1:])
+                )
+                QToolTip.showText(
+                    event.globalPosition().toPoint(),
+                    f"{self.planner_label}\nRobot {path.robot_id}\n"
+                    f"Length: {length:.1f} mm\nPlan: {self.preview.planning_time_ms:.3f} ms",
+                    self,
+                )
+        else:
+            self.cursor_mm = None
+        self.update()
+
+    def leaveEvent(self, event) -> None:
+        self.cursor_mm = None
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if self.scenario is None or not self._field_rect().contains(event.position()):
+            return
+        selected_path = self._nearest_path(event.position())
+        if selected_path is not None:
+            for index, robot in enumerate(self.scenario.robots):
+                if (robot.is_yellow, robot.robot_id) == (
+                    selected_path.is_yellow,
+                    selected_path.robot_id,
+                ):
+                    self.selected_robot = index
+                    self.selected_obstacle = None
+                    self.selection_changed.emit()
+                    self.update()
+                    return
+        point = self._to_world(event.position())
+        robot_index = self._nearest_robot(event.position())
+        obstacle_index = self._nearest_scenario_obstacle(event.position())
+
+        if self.mode == "obstacles":
+            if robot_index is not None:
+                robot = self.scenario.robots.pop(robot_index)
+                self.scenario.set_obstacle(
+                    ScenarioObstacle(
+                        robot.robot_id,
+                        robot.is_yellow,
+                        robot.start_mm,
+                        ROBOT_RADIUS_MM,
+                    )
+                )
+                self.selected_robot = None
+                self.selected_obstacle = next(
+                    i
+                    for i, obstacle in enumerate(self.scenario.obstacles)
+                    if (obstacle.is_yellow, obstacle.obstacle_id)
+                    == (robot.is_yellow, robot.robot_id)
+                )
+                self._commit_edit("Robot converted to obstacle")
+                return
+            if obstacle_index is not None:
+                self.selected_obstacle = obstacle_index
+                self.selected_robot = None
+                self.selection_changed.emit()
+                self.update()
+                return
+            if self.selected_obstacle is not None:
+                obstacle = self.scenario.obstacles[self.selected_obstacle]
+                self.scenario.obstacles[self.selected_obstacle] = replace(
+                    obstacle, position_mm=point
+                )
+                self._commit_edit("Obstacle position changed")
+                return
+
+        if self.mode == "starting_pos":
+            if obstacle_index is not None:
+                obstacle = self.scenario.obstacles.pop(obstacle_index)
+                self.selected_robot = self.scenario.set_robot(
+                    ScenarioRobot(
+                        obstacle.obstacle_id,
+                        obstacle.is_yellow,
+                        obstacle.position_mm,
+                        None,
+                    )
+                )
+                self.selected_obstacle = None
+                self._commit_edit("Starting-position robot selected")
+                return
+            if robot_index is not None:
+                self.selected_robot = robot_index
+                self.selected_obstacle = None
+                self.selection_changed.emit()
+                self.update()
+                return
+            if self.selected_robot is not None:
+                robot = self.scenario.robots[self.selected_robot]
+                self.scenario.robots[self.selected_robot] = replace(robot, start_mm=point)
+                self._commit_edit("Starting position changed")
+                return
+
+        if self.mode == "target_pos" and self.selected_robot is not None:
+            robot = self.scenario.robots[self.selected_robot]
+            self.scenario.robots[self.selected_robot] = replace(robot, target_mm=point)
+            self._commit_edit("Target position changed")
+
+    def paintEvent(self, event) -> None:
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#101820"))
+        field = self._field_rect()
+        painter.fillRect(field, QColor("#176b3a"))
+        painter.setPen(QPen(QColor("#f1f5f3"), 2))
+        painter.drawRect(field)
+        painter.drawLine(field.center().x(), field.top(), field.center().x(), field.bottom())
+        centre_radius = 500 * field.width() / FIELD_LENGTH_MM
+        painter.drawEllipse(field.center(), centre_radius, centre_radius)
+        self._draw_penalty_boxes(painter, field)
+        self._draw_goals(painter, field)
+
+        if self.show_map_layer:
+            self._draw_debug_map(painter)
+        if self.scenario is not None:
+            for index, obstacle in enumerate(self.scenario.obstacles):
+                self._draw_planner_obstacle(painter, obstacle, index)
+            for index, robot in enumerate(self.scenario.robots):
+                self._draw_planned_robot(painter, robot, index)
+        if self.show_path_layer:
+            self._draw_paths(painter)
+        if self.cursor_mm is not None:
+            self._draw_cursor_guides(painter)
+        if self.planner_label:
+            painter.setPen(QColor("#f5f5f5"))
+            painter.drawText(field.adjusted(8, 8, -8, -8), Qt.AlignTop, self.planner_label)
+
+    def _draw_planner_obstacle(
+        self, painter: QPainter, obstacle: ScenarioObstacle, index: int
+    ) -> None:
+        centre = self._to_screen(obstacle.position_mm)
+        scale = self._field_rect().width() / FIELD_LENGTH_MM
+        radius = obstacle.radius_mm * scale
+        if self.show_shape_layer:
+            inflated = (obstacle.radius_mm + ROBOT_RADIUS_MM) * scale
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(255, 138, 128, 150), 2, Qt.DashLine))
+            if "Visibility" in self.planner_label:
+                polygon = [
+                    centre
+                    + QPointF(inflated * cos(2 * pi * side / 12), -inflated * sin(2 * pi * side / 12))
+                    for side in range(12)
+                ]
+                for first, second in zip(polygon, polygon[1:] + polygon[:1]):
+                    painter.drawLine(first, second)
+            else:
+                painter.drawEllipse(centre, inflated, inflated)
+        painter.setBrush(QColor(220, 70, 70, 180) if self.show_robot_layer else Qt.NoBrush)
+        painter.setPen(
+            QPen(QColor("white") if index == self.selected_obstacle else QColor("#ff8a80"), 3)
+        )
+        painter.drawEllipse(centre, radius, radius)
+        painter.drawLine(centre + QPointF(-radius, -radius), centre + QPointF(radius, radius))
+        painter.drawLine(centre + QPointF(-radius, radius), centre + QPointF(radius, -radius))
+        painter.drawText(centre + QPointF(-8, -radius - 5), f"O{obstacle.obstacle_id}")
+
+    def _draw_planned_robot(
+        self, painter: QPainter, robot: ScenarioRobot, index: int
+    ) -> None:
+        start = self._to_screen(robot.start_mm)
+        radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
+        color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
+        painter.setBrush(
+            QColor(color.red(), color.green(), color.blue(), 100)
+            if self.show_robot_layer
+            else Qt.NoBrush
+        )
+        painter.setPen(QPen(QColor("white") if index == self.selected_robot else color, 3))
+        painter.drawEllipse(start, radius, radius)
+        painter.drawText(start + QPointF(-8, -radius - 5), f"S{robot.robot_id}")
+        if robot.target_mm is not None:
+            target = self._to_screen(robot.target_mm)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#f5f5f5"), 2, Qt.DashLine))
+            painter.drawEllipse(target, radius, radius)
+            painter.drawLine(target + QPointF(-8, 0), target + QPointF(8, 0))
+            painter.drawLine(target + QPointF(0, -8), target + QPointF(0, 8))
+            painter.drawText(target + QPointF(-8, -radius - 5), f"T{robot.robot_id}")
+
+    def _draw_debug_map(self, painter: QPainter) -> None:
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(144, 202, 249, 120), 1))
+        for first, second in self.preview.edges:
+            painter.drawLine(self._to_screen(first), self._to_screen(second))
+        painter.setBrush(QColor(144, 202, 249, 170))
+        for node in self.preview.nodes:
+            painter.drawEllipse(self._to_screen(node), 2.5, 2.5)
+
+    def _draw_cursor_guides(self, painter: QPainter) -> None:
+        assert self.cursor_mm is not None
+        field = self._field_rect()
+        point = self._to_screen(self.cursor_mm)
+        painter.setPen(QPen(QColor(255, 255, 255, 128), 1, Qt.DashLine))
+        painter.drawLine(field.left(), point.y(), field.right(), point.y())
+        painter.drawLine(point.x(), field.top(), point.x(), field.bottom())
+        label = f"x {self.cursor_mm[0]:.0f} mm   y {self.cursor_mm[1]:.0f} mm"
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(point + QPointF(12, -12), label)
+
+    def _nearest_scenario_obstacle(self, point: QPointF) -> int | None:
+        if self.scenario is None or not self.scenario.obstacles:
+            return None
+        distance, index = min(
+            (
+                (self._to_screen(obstacle.position_mm) - point).manhattanLength(),
+                index,
+            )
+            for index, obstacle in enumerate(self.scenario.obstacles)
+        )
+        return index if distance < 35 else None
+
+    def _nearest_path(self, point: QPointF) -> PlannedRobotPath | None:
+        best: tuple[float, PlannedRobotPath] | None = None
+        for path in self.preview.paths:
+            for first, second in zip(path.points_mm, path.points_mm[1:]):
+                a = self._to_screen(first)
+                b = self._to_screen(second)
+                distance = _point_segment_distance(point, a, b)
+                if best is None or distance < best[0]:
+                    best = (distance, path)
+        return best[1] if best is not None and best[0] < 10 else None
+
+    def _commit_edit(self, message: str) -> None:
+        self.clear_preview()
+        self.scenario_changed.emit()
+        self.selection_changed.emit()
+        self.edit_committed.emit(message)
+        self.update()
+
+
+def _point_segment_distance(point: QPointF, first: QPointF, second: QPointF) -> float:
+    dx = second.x() - first.x()
+    dy = second.y() - first.y()
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 1e-9:
+        return hypot(point.x() - first.x(), point.y() - first.y())
+    ratio = ((point.x() - first.x()) * dx + (point.y() - first.y()) * dy) / length_sq
+    ratio = max(0.0, min(1.0, ratio))
+    nearest_x = first.x() + ratio * dx
+    nearest_y = first.y() + ratio * dy
+    return hypot(point.x() - nearest_x, point.y() - nearest_y)
 
 
 class ConfigurationsPage(QWidget):
@@ -497,6 +796,483 @@ class ConfigurationsPage(QWidget):
         return answer == QMessageBox.Yes
 
 
+class ScenarioPlannerPage(QWidget):
+    """Preview-only scenario editor specified by UI Redesign Plan v1."""
+
+    def __init__(self, runtime: ResearchRuntime, store: ScenarioStore) -> None:
+        super().__init__()
+        self.runtime = runtime
+        self.store = store
+        self.scenario: Scenario | None = None
+        self.scenario_path: Path | None = None
+        self.previews: dict[str, PlannerPreview] = {}
+        self.metrics: dict[str, RunMetrics] = {}
+        self.canvas = ScenarioPlannerCanvas()
+        self._build_ui()
+        self._refresh_files()
+        self._refresh_inspectors()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        title = QLabel("Plan a Scenario")
+        title.setStyleSheet("font-size: 18px; font-weight: 700;")
+        root.addWidget(title)
+
+        tools = QHBoxLayout()
+        self.tool_buttons: dict[str, QPushButton] = {}
+        for key, label in (
+            ("obstacles", "△  Obstacles"),
+            ("starting_pos", "○  Starting position"),
+            ("target_pos", "×  Target position"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.clicked.connect(lambda checked=False, mode=key: self._select_tool(mode))
+            self.tool_buttons[key] = button
+            tools.addWidget(button)
+        tools.addStretch(1)
+        root.addLayout(tools)
+        self.tool_buttons["starting_pos"].setChecked(True)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self._build_plans_panel())
+        right_layout.addWidget(self._build_inspector("Obstacles", obstacle=True))
+        right_layout.addWidget(self._build_inspector("Planned robots", obstacle=False))
+        right_layout.addStretch(1)
+
+        splitter = QSplitter()
+        splitter.addWidget(self.canvas)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setSizes((900, 330))
+        root.addWidget(splitter, 1)
+
+        bottom = QHBoxLayout()
+        snapshot = QPushButton("Export snapshot")
+        export = QPushButton("Export result A")
+        snapshot.clicked.connect(self._export_snapshot)
+        export.clicked.connect(self._export_results)
+        bottom.addWidget(snapshot)
+        bottom.addWidget(export)
+        bottom.addStretch(1)
+        self.layer_buttons: dict[str, QPushButton] = {}
+        for key, label in (
+            ("map", "Map"),
+            ("robots", "Robots"),
+            ("shape", "Obstacle shape"),
+            ("path", "Path"),
+        ):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setChecked(True)
+            button.toggled.connect(lambda checked, layer=key: self._toggle_layer(layer, checked))
+            self.layer_buttons[key] = button
+            bottom.addWidget(button)
+        root.addLayout(bottom)
+
+        self.status = QLabel("Load from grSim or create a blank scenario")
+        self.status.setWordWrap(True)
+        root.addWidget(self.status)
+
+        self.canvas.selection_changed.connect(self._refresh_inspectors)
+        self.canvas.edit_committed.connect(self._scenario_edited)
+
+    def _build_plans_panel(self) -> QGroupBox:
+        panel = QGroupBox("Plans")
+        layout = QGridLayout(panel)
+        load_grsim = QPushButton("Load From grSim")
+        save = QPushButton("Save Scenario")
+        self.file_selector = QComboBox()
+        load = QPushButton("Load")
+        add = QPushButton("Add New")
+        delete = QPushButton("Delete")
+        self.planner_selector = QComboBox()
+        for label, planner_cls in discover_planners().items():
+            self.planner_selector.addItem(label, planner_cls)
+        self.plan_button = QPushButton("Plan")
+        self.clear_button = QPushButton("Clear")
+        self.map_time = QLabel("Map: -- ms")
+        self.plan_time = QLabel("Plan: -- ms")
+
+        layout.addWidget(load_grsim, 0, 0)
+        layout.addWidget(save, 0, 1)
+        layout.addWidget(self.file_selector, 1, 0)
+        layout.addWidget(load, 1, 1)
+        layout.addWidget(self.planner_selector, 2, 0)
+        layout.addWidget(add, 2, 1)
+        layout.addWidget(self.plan_button, 3, 0)
+        layout.addWidget(self.clear_button, 3, 1)
+        layout.addWidget(delete, 4, 1)
+        layout.addWidget(self.map_time, 5, 0)
+        layout.addWidget(self.plan_time, 5, 1)
+
+        load_grsim.clicked.connect(self._load_from_grsim)
+        save.clicked.connect(self._save)
+        load.clicked.connect(self._load)
+        add.clicked.connect(self._add_new)
+        delete.clicked.connect(self._delete)
+        self.plan_button.clicked.connect(self._plan)
+        self.clear_button.clicked.connect(self._clear_preview)
+        self.planner_selector.currentIndexChanged.connect(self._planner_changed)
+        return panel
+
+    def _build_inspector(self, title: str, *, obstacle: bool) -> QGroupBox:
+        panel = QGroupBox(title)
+        layout = QVBoxLayout(panel)
+        count = QLabel("n: 0")
+        listing = QListWidget()
+        layout.addWidget(count)
+        layout.addWidget(listing)
+        if obstacle:
+            self.obstacle_count = count
+            self.obstacle_list = listing
+            listing.currentRowChanged.connect(self._obstacle_row_selected)
+        else:
+            self.robot_count = count
+            self.robot_list = listing
+            listing.currentRowChanged.connect(self._robot_row_selected)
+        return panel
+
+    def _select_tool(self, mode: str) -> None:
+        if mode == "target_pos" and self.canvas.selected_robot is None:
+            self.status.setText("Select a starting-position robot before setting a target")
+            self._refresh_controls()
+            return
+        self.canvas.mode = mode
+        for key, button in self.tool_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(key == mode)
+            button.blockSignals(False)
+
+    def _load_from_grsim(self) -> None:
+        snapshot = self.runtime.world_snapshot
+        if snapshot is None:
+            QMessageBox.warning(self, "No snapshot", "No complete grSim snapshot is available yet.")
+            return
+        obstacles = [
+            ScenarioObstacle(
+                robot.robot_id,
+                robot.isYellow,
+                robot.position,
+                ROBOT_RADIUS_MM,
+            )
+            for robot in (*snapshot.yellow, *snapshot.blue)
+            if robot is not None
+        ]
+        self.scenario = Scenario(
+            f"snapshot_{int(time.time())}",
+            obstacles=obstacles,
+            ball=ScenarioBall(snapshot.ball.position) if snapshot.ball is not None else None,
+        )
+        self.scenario_path = None
+        self._install_scenario("Snapshot loaded; select a starting-position robot")
+
+    def _add_new(self) -> None:
+        self.scenario = Scenario("untitled")
+        self.scenario_path = None
+        self._install_scenario("Blank scenario created")
+
+    def _install_scenario(self, message: str) -> None:
+        self.previews.clear()
+        self.metrics.clear()
+        self.canvas.set_scenario(self.scenario)
+        self.canvas.selected_obstacle = None
+        self.canvas.clear_preview()
+        self._refresh_inspectors()
+        self._refresh_controls()
+        self.status.setText(message)
+
+    def _save(self) -> None:
+        if self.scenario is None:
+            QMessageBox.warning(self, "No scenario", "Load or create a scenario first.")
+            return
+        errors = self.scenario.validation_errors(require_robot=False)
+        if errors:
+            QMessageBox.warning(self, "Incomplete scenario", "\n".join(errors))
+            return
+        name, accepted = QInputDialog.getText(
+            self, "Save scenario", "Scenario name", text=self.scenario.name
+        )
+        if not accepted or not name.strip():
+            return
+        try:
+            self.scenario.name = name.strip()
+            self.scenario.schema_version = 3
+            self.scenario_path = self.store.save(self.scenario)
+            self._refresh_files()
+            self.status.setText(f"Saved {self.scenario_path.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot save scenario", str(exc))
+
+    def _load(self) -> None:
+        path_text = self.file_selector.currentData()
+        if not path_text:
+            return
+        try:
+            self.scenario_path = Path(path_text)
+            self.scenario = self.store.load(self.scenario_path)
+            self._install_scenario(f"Loaded {self.scenario_path.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot load scenario", str(exc))
+
+    def _delete(self) -> None:
+        path_text = self.file_selector.currentData()
+        if not path_text:
+            return
+        path = Path(path_text)
+        answer = QMessageBox.question(
+            self, "Delete scenario", f"Delete {path.name}? This cannot be undone."
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            path.unlink()
+            if self.scenario_path == path:
+                self.scenario_path = None
+            self._refresh_files()
+            self.status.setText(f"Deleted {path.name}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot delete scenario", str(exc))
+
+    def _refresh_files(self) -> None:
+        self.file_selector.clear()
+        for path in self.store.list_paths():
+            self.file_selector.addItem(path.stem, str(path))
+
+    def _plan(self) -> None:
+        if self.scenario is None:
+            QMessageBox.warning(self, "No scenario", "Load or create a scenario first.")
+            return
+        errors = self.scenario.validation_errors()
+        if errors:
+            QMessageBox.warning(self, "Cannot plan", "\n".join(errors))
+            return
+
+        previews: dict[str, PlannerPreview] = {}
+        metrics: dict[str, RunMetrics] = {}
+        failures = []
+        for index in range(self.planner_selector.count()):
+            label = self.planner_selector.itemText(index)
+            planner_cls = self.planner_selector.itemData(index)
+            recorder = StepRecorder()
+            self.runtime.set_planner(planner_cls, record=recorder)
+            try:
+                paths = self.runtime.plan(self.scenario)
+            except Exception as exc:
+                paths = ()
+                failures.append(f"{label}: {exc}")
+            planning_ms = sum(self.runtime.last_plan_durations_ms)
+            map_started = time.perf_counter()
+            nodes, edges = self._debug_geometry(label, recorder)
+            geometry_ms = (time.perf_counter() - map_started) * 1000.0
+            map_ms = recorder.map_time_ms if recorder.map_time_ms is not None else geometry_ms
+            search_ms = (
+                recorder.search_time_ms
+                if recorder.search_time_ms is not None
+                else max(0.0, planning_ms - map_ms)
+            )
+            previews[label] = PlannerPreview(paths, map_ms, search_ms, nodes, edges)
+            run_metrics = RunMetrics()
+            run_metrics.record_pipeline(0.0, map_ms)
+            run_metrics.record_planning(
+                (search_ms,), failures=self.runtime.last_plan_failures
+            )
+            run_metrics.finish(completed=False)
+            metrics[label] = run_metrics
+        self.previews = previews
+        self.metrics = metrics
+        self._planner_changed()
+        self.status.setText(
+            "Planned all algorithms; no velocities sent"
+            + (f" · {'; '.join(failures)}" if failures else "")
+        )
+
+    def _debug_geometry(
+        self, label: str, recorder: StepRecorder
+    ) -> tuple[
+        tuple[tuple[float, float], ...],
+        tuple[tuple[tuple[float, float], tuple[float, float]], ...],
+    ]:
+        nodes = []
+        edges = []
+        for step in recorder.steps:
+            if step["kind"] == "sample" and step.get("free"):
+                nodes.append(tuple(step["point"]))
+            elif step["kind"] == "edge_test" and step.get("accepted"):
+                first = tuple(step["a"])
+                second = tuple(step["b"])
+                edges.append((first, second))
+                nodes.extend((first, second))
+        if "Voronoi" in label and self.scenario is not None:
+            obstacles = tuple(
+                PlanningObstacle(
+                    robot_id=obstacle.obstacle_id,
+                    isYellow=obstacle.is_yellow,
+                    pos_mm=obstacle.position_mm,
+                    radius_mm=obstacle.radius_mm,
+                )
+                for obstacle in self.scenario.obstacles
+            )
+            voronoi_map = generate_bounded_voronoi_map(obstacles=obstacles)
+            by_id = {node.id: (node.x, node.y) for node in voronoi_map.nodes}
+            nodes = list(by_id.values())
+            edges = [
+                (by_id[edge.start_id], by_id[edge.end_id])
+                for edge in voronoi_map.edges
+                if edge.start_id in by_id and edge.end_id in by_id
+            ]
+        return tuple(dict.fromkeys(nodes)), tuple(edges)
+
+    def _clear_preview(self) -> None:
+        self.previews = {
+            label: replace(preview, paths=(), nodes=(), edges=())
+            for label, preview in self.previews.items()
+        }
+        self.canvas.clear_preview()
+        self.layer_buttons["map"].setEnabled(False)
+        self.status.setText("Planner geometry cleared; timing values retained")
+
+    def _planner_changed(self) -> None:
+        label = self.planner_selector.currentText()
+        preview = self.previews.get(label, PlannerPreview((), 0.0, 0.0))
+        self.canvas.planner_key = planner_key(self.planner_selector.currentData())
+        self.canvas.set_preview(preview, label)
+        if label in self.previews:
+            self.map_time.setText(f"Map: {preview.map_time_ms:.3f} ms")
+            self.plan_time.setText(f"Plan: {preview.planning_time_ms:.3f} ms")
+        else:
+            self.map_time.setText("Map: -- ms")
+            self.plan_time.setText("Plan: -- ms")
+        self.layer_buttons["map"].setEnabled(bool(preview.nodes or preview.edges))
+        self.canvas.update()
+
+    def _scenario_edited(self, message: str) -> None:
+        self.previews.clear()
+        self.metrics.clear()
+        self.map_time.setText("Map: -- ms")
+        self.plan_time.setText("Plan: -- ms")
+        self.status.setText(f"{message}; press Plan to replan")
+        self._refresh_inspectors()
+        self._refresh_controls()
+
+    def _refresh_inspectors(self) -> None:
+        self.obstacle_list.blockSignals(True)
+        self.robot_list.blockSignals(True)
+        self.obstacle_list.clear()
+        self.robot_list.clear()
+        if self.scenario is None:
+            obstacles = ()
+            robots = ()
+        else:
+            obstacles = self.scenario.obstacles
+            robots = self.scenario.robots
+        for obstacle in obstacles:
+            team = "Y" if obstacle.is_yellow else "B"
+            self.obstacle_list.addItem(
+                f"{team}{obstacle.obstacle_id} | "
+                f"({obstacle.position_mm[0]:.0f}, {obstacle.position_mm[1]:.0f}) mm | "
+                f"v=({obstacle.velocity_mmps[0]:.0f}, {obstacle.velocity_mmps[1]:.0f})"
+            )
+        for robot in robots:
+            team = "Y" if robot.is_yellow else "B"
+            target = (
+                "not set"
+                if robot.target_mm is None
+                else f"({robot.target_mm[0]:.0f}, {robot.target_mm[1]:.0f})"
+            )
+            self.robot_list.addItem(
+                f"{team}{robot.robot_id} | start=({robot.start_mm[0]:.0f}, "
+                f"{robot.start_mm[1]:.0f}) | target={target}"
+            )
+        self.obstacle_count.setText(f"n: {len(obstacles)}")
+        self.robot_count.setText(f"n: {len(robots)}")
+        if self.canvas.selected_obstacle is not None:
+            self.obstacle_list.setCurrentRow(self.canvas.selected_obstacle)
+        if self.canvas.selected_robot is not None:
+            self.robot_list.setCurrentRow(self.canvas.selected_robot)
+        self.obstacle_list.blockSignals(False)
+        self.robot_list.blockSignals(False)
+
+    def _refresh_controls(self) -> None:
+        has_robot = (
+            self.scenario is not None
+            and self.canvas.selected_robot is not None
+            and self.canvas.selected_robot < len(self.scenario.robots)
+        )
+        self.tool_buttons["target_pos"].setEnabled(has_robot)
+        label = self.planner_selector.currentText()
+        preview = self.previews.get(label)
+        self.layer_buttons["map"].setEnabled(
+            preview is not None and bool(preview.nodes or preview.edges)
+        )
+        if not has_robot and self.canvas.mode == "target_pos":
+            self._select_tool("starting_pos")
+
+    def _obstacle_row_selected(self, row: int) -> None:
+        if row < 0:
+            return
+        self.canvas.selected_obstacle = row
+        self.canvas.selected_robot = None
+        self.canvas.update()
+
+    def _robot_row_selected(self, row: int) -> None:
+        if row < 0:
+            return
+        self.canvas.selected_robot = row
+        self.canvas.selected_obstacle = None
+        self._refresh_controls()
+        self.canvas.update()
+
+    def _toggle_layer(self, layer: str, checked: bool) -> None:
+        if layer == "map":
+            self.canvas.show_map_layer = checked
+        elif layer == "robots":
+            self.canvas.show_robot_layer = checked
+        elif layer == "shape":
+            self.canvas.show_shape_layer = checked
+        elif layer == "path":
+            self.canvas.show_path_layer = checked
+        self.canvas.update()
+
+    def _export_snapshot(self) -> None:
+        if self.scenario is None:
+            QMessageBox.warning(self, "No scenario", "Load or create a scenario first.")
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export field snapshot",
+            "exports/scenario_snapshot.png",
+            "PNG images (*.png)",
+        )
+        if not destination:
+            return
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cursor = self.canvas.cursor_mm
+        self.canvas.cursor_mm = None
+        self.canvas.update()
+        self.canvas.grab().save(str(path), "PNG")
+        self.canvas.cursor_mm = cursor
+        self.status.setText(f"Exported field snapshot to {path}")
+
+    def _export_results(self) -> None:
+        if not self.metrics:
+            QMessageBox.warning(self, "No results", "Plan the scenario before exporting.")
+            return
+        destination, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export planner results",
+            "exports/results_a.csv",
+            "CSV files (*.csv)",
+        )
+        if not destination:
+            return
+        path = export_planner_results(destination, "a", self.metrics)
+        self.status.setText(f"Exported planner results to {path}")
+
+
 class ResearchConsole(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -519,8 +1295,10 @@ class ResearchConsole(QMainWindow):
 
         self.tabs = QTabWidget()
         self.experiment_page = QWidget()
+        self.scenario_planner_page = ScenarioPlannerPage(self.runtime, self.store)
         self.config_page = ConfigurationsPage()
         self.tabs.addTab(self.experiment_page, "Experiment")
+        self.tabs.addTab(self.scenario_planner_page, "Scenario Planner")
         self.tabs.addTab(self.config_page, "Configurations")
         self.setCentralWidget(self.tabs)
         self._build_experiment_page()
@@ -761,7 +1539,7 @@ class ResearchConsole(QMainWindow):
             QMessageBox.warning(self, "Incomplete course", "Select a robot first.")
             return
         robot = self.current_scenario.robots[0]
-        if robot.start_mm == robot.target_mm:
+        if robot.target_mm is None or robot.start_mm == robot.target_mm:
             QMessageBox.warning(
                 self,
                 "Incomplete course",

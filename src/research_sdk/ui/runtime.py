@@ -180,11 +180,13 @@ class ResearchRuntime:
         self.last_send_latency_ms = (perf_counter() - started) * 1000.0
 
     def plan(self, scenario: Scenario) -> tuple[PlannedRobotPath, ...]:
+        scenario.require_complete()
         paths = []
         durations_ms: list[float] = []
         self.last_plan_durations_ms = ()
         self.last_plan_failures = 0
         for robot in scenario.robots:
+            assert robot.target_mm is not None
             obstacles = tuple(
                 PlanningObstacle(
                     robot_id=obstacle.obstacle_id,
@@ -229,7 +231,7 @@ class ResearchRuntime:
         self.last_plan_durations_ms = tuple(durations_ms)
         return tuple(paths)
 
-    def set_planner(self, planner_cls: type | None) -> None:
+    def set_planner(self, planner_cls: type | None, *, record=None) -> None:
         """Swap the active planner, e.g. from the UI's "Active planner" dropdown.
 
         ``VoronoiDijkstraPlanner`` is discoverable but implements a different,
@@ -242,7 +244,7 @@ class ResearchRuntime:
         if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
             self._planner = PlannerAPI()
         else:
-            self._planner = planner_cls()
+            self._planner = planner_cls(**({"record": record} if record is not None else {}))
 
     def reset_planner(self) -> None:
         self._planner.reset()

@@ -16,6 +16,8 @@ planners without an adapter, once one exists.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
+from time import perf_counter
 
 FIELD_LENGTH_MM = 9000.0
 FIELD_WIDTH_MM = 6000.0
@@ -84,7 +86,7 @@ class PlanResult:
 def path_length_mm(waypoints: tuple[tuple[float, float], ...]) -> float:
     """Sum of Euclidean segment lengths along a waypoint polyline."""
     total = 0.0
-    for (x0, y0), (x1, y1) in zip(waypoints, waypoints[1:]):
+    for (x0, y0), (x1, y1) in pairwise(waypoints):
         total += ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
     return total
 
@@ -108,6 +110,30 @@ class StepRecorder:
 
     def __init__(self) -> None:
         self.steps: list[dict] = []
+        self.started_at = perf_counter()
+        self.first_map_event_at: float | None = None
+        self.last_map_event_at: float | None = None
+        self.path_event_at: float | None = None
 
     def log(self, kind: str, **data) -> None:
+        now = perf_counter()
+        if kind == "path":
+            self.path_event_at = now
+        else:
+            if self.first_map_event_at is None:
+                self.first_map_event_at = now
+            self.last_map_event_at = now
         self.steps.append({"kind": kind, **data})
+
+    @property
+    def map_time_ms(self) -> float | None:
+        if self.first_map_event_at is None or self.last_map_event_at is None:
+            return None
+        return (self.last_map_event_at - self.first_map_event_at) * 1000.0
+
+    @property
+    def search_time_ms(self) -> float | None:
+        if self.path_event_at is None:
+            return None
+        start = self.last_map_event_at or self.started_at
+        return (self.path_event_at - start) * 1000.0

@@ -1,7 +1,9 @@
 # Scenario Planner UI specification
 
-Status: approved design reference; not implemented yet  
-Reference name: **UI Redesign Plan v1**  
+Status: implemented initial version; acceptance checks passing
+
+Reference name: **UI Redesign Plan v1**
+
 Source: annotated "Plan a Scenario" sketch and follow-up decisions, 2026-08-24
 
 This document is the implementation contract for the new scenario-planning
@@ -16,9 +18,9 @@ existing tabs remain available during the first implementation so current
 live-execution, configuration, and Result B workflows are not removed by the
 redesign.
 
-The workspace follows the application's existing dark Qt visual style. The
-sketch defines information hierarchy and control placement, not a replacement
-colour theme.
+The workspace follows the application's existing Qt/Fusion styling and dark
+field canvas. The sketch defines information hierarchy and control placement,
+not a replacement colour theme.
 
 The new workspace contains:
 

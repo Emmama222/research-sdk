@@ -15,7 +15,7 @@ class ScenarioRobot:
     robot_id: int
     is_yellow: bool
     start_mm: Point
-    target_mm: Point
+    target_mm: Point | None
     orientation_rad: float = 0.0
 
 
@@ -85,6 +85,22 @@ class Scenario:
     def clear_obstacles(self) -> None:
         self.obstacles.clear()
 
+    def validation_errors(self, *, require_robot: bool = True) -> tuple[str, ...]:
+        """Return user-facing errors that prevent planning or saving."""
+        errors = []
+        if require_robot and not self.robots:
+            errors.append("Select at least one robot and define its starting position")
+        for robot in self.robots:
+            if robot.target_mm is None:
+                team = "yellow" if robot.is_yellow else "blue"
+                errors.append(f"{team} robot {robot.robot_id} has no target position")
+        return tuple(errors)
+
+    def require_complete(self) -> None:
+        errors = self.validation_errors(require_robot=True)
+        if errors:
+            raise ValueError("; ".join(errors))
+
     def obstacles_for(self, planner_key: str | None) -> tuple[ScenarioObstacle, ...]:
         """Return shared obstacles plus those assigned to ``planner_key``."""
         return tuple(
@@ -103,7 +119,11 @@ class Scenario:
                     robot_id=int(robot["robot_id"]),
                     is_yellow=bool(robot["is_yellow"]),
                     start_mm=tuple(robot["start_mm"]),
-                    target_mm=tuple(robot["target_mm"]),
+                    target_mm=(
+                        tuple(robot["target_mm"])
+                        if robot.get("target_mm") is not None
+                        else None
+                    ),
                     orientation_rad=float(robot.get("orientation_rad", 0.0)),
                 )
                 for robot in payload.get("robots", ())
