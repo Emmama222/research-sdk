@@ -13,6 +13,7 @@ dependencies = [
     "PyYAML>=6.0",
     "numpy>=1.26",
     "networkx>=3.2",
+    "networkx>=3.6",
 ]
 
 [project.optional-dependencies]
