@@ -11,25 +11,20 @@ import multiprocessing
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
-
-from research_sdk.ui.main_window import MainWindow
 
 
-def main():
+from research_sdk.ui.app import ResearchConsole
+
+
+def main()->int:
     multiprocessing.freeze_support()
 
-    app = QApplication(sys.argv)
-    app.setApplicationName("TurtleRabbit")
-    app.setOrganizationName("WSU")
-
-    app.setFont(QFont("Segoe UI", 11))
-
-    window = MainWindow()
+    application = QApplication.instance() or QApplication(sys.argv)
+    application.setStyle("Fusion")
+    window = ResearchConsole()
     window.show()
-
-    sys.exit(app.exec())
+    return application.exec()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
