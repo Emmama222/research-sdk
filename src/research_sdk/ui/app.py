@@ -47,6 +47,8 @@ from research_sdk.config import (
 )
 from research_sdk.network.ssl_sockets import Vision, grSimVision
 from research_sdk.planners.common import StepRecorder
+from research_sdk.ui.execution.controller import ExecutionState
+from research_sdk.ui.execution.page import ExecutionConsolePage
 from research_sdk.ui.runtime import (
     LiveRobot,
     PlannedRobotPath,
@@ -1295,13 +1297,17 @@ class ResearchConsole(QMainWindow):
 
         self.tabs = QTabWidget()
         self.experiment_page = QWidget()
+        self.execution_page = ExecutionConsolePage(self.runtime, self.store)
         self.scenario_planner_page = ScenarioPlannerPage(self.runtime, self.store)
         self.config_page = ConfigurationsPage()
-        self.tabs.addTab(self.experiment_page, "Experiment")
+        self.tabs.addTab(self.execution_page, "Execution")
         self.tabs.addTab(self.scenario_planner_page, "Scenario Planner")
         self.tabs.addTab(self.config_page, "Configurations")
         self.setCentralWidget(self.tabs)
         self._build_experiment_page()
+        self.execution_page.navigate_to_planner.connect(
+            lambda: self.tabs.setCurrentWidget(self.scenario_planner_page)
+        )
         self._build_toolbar()
         self._refresh_scenarios()
         self._refresh_controls()
@@ -1320,6 +1326,8 @@ class ResearchConsole(QMainWindow):
         map_action.setChecked(True)
         map_action.toggled.connect(self.live_canvas.setVisible)
         map_action.toggled.connect(self.canvas.setVisible)
+        map_action.toggled.connect(self.execution_page.canvas.setVisible)
+        map_action.toggled.connect(self.scenario_planner_page.canvas.setVisible)
         toolbar.addAction(map_action)
 
     def _build_experiment_page(self) -> None:
@@ -1877,11 +1885,22 @@ class ResearchConsole(QMainWindow):
                 and not self.canvas.live_robots
             ):
                 self._capture_plan_snapshot()
+        if update is not None:
+            self.execution_page.process_snapshot(update.snapshot)
         self.runtime.last_receive_latency_ms = latency_ms
         self.receive_latency.set_latency(latency_ms)
 
     def _live_grsim_failed(self, message: str) -> None:
         self.status.setText(f"Live grSim display unavailable: {message}")
+        if self.execution_page.controller.state in (
+            ExecutionState.APPLYING,
+            ExecutionState.RUNNING,
+            ExecutionState.PAUSED,
+            ExecutionState.RESETTING,
+        ):
+            self.execution_page.emergency_stop(
+                error=f"Fatal grSim vision error: {message}"
+            )
 
     def _export(self, format_name: str) -> None:
         destination, _ = QFileDialog.getSaveFileName(
@@ -1924,6 +1943,7 @@ class ResearchConsole(QMainWindow):
                 return
         if self.vision_thread is not None:
             self.vision_thread.stop()
+        self.execution_page.shutdown()
         self.control_timer.stop()
         self.runtime.stop_execution()
         if self.display_vision_thread is not None:

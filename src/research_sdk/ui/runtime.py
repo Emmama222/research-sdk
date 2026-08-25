@@ -125,6 +125,13 @@ class ResearchRuntime:
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
         self._waypoint_indices: dict[tuple[bool, int], int] = {}
+        self._paused = False
+        self._step_mode = False
+        self._step_boundary_indices: dict[tuple[bool, int], int] = {}
+        self.step_completed = False
+        self.last_waypoint_transitions: tuple[
+            tuple[tuple[bool, int], int], ...
+        ] = ()
 
     def ingest_vision_packet(self, packet) -> LiveWorldFrame | None:
         """Update the runtime's world-state boundary from one vision packet."""
@@ -177,6 +184,14 @@ class ResearchRuntime:
         packet = grSimPacketFactory.scenario_replacement_command(replacements)
         started = perf_counter()
         self._get_sender().send_packet(packet)
+        if scenario.ball is not None:
+            ball_packet = grSimPacketFactory.ball_replacement_command(
+                x=scenario.ball.position_mm[0] / 1000.0,
+                y=scenario.ball.position_mm[1] / 1000.0,
+                vx=scenario.ball.velocity_mmps[0] / 1000.0,
+                vy=scenario.ball.velocity_mmps[1] / 1000.0,
+            )
+            self._get_sender().send_packet(ball_packet)
         self.last_send_latency_ms = (perf_counter() - started) * 1000.0
 
     def plan(self, scenario: Scenario) -> tuple[PlannedRobotPath, ...]:
@@ -249,18 +264,86 @@ class ResearchRuntime:
     def reset_planner(self) -> None:
         self._planner.reset()
 
-    def start_execution(self, paths: tuple[PlannedRobotPath, ...]) -> None:
+    def start_execution(
+        self,
+        paths: tuple[PlannedRobotPath, ...],
+        *,
+        waypoint_indices: dict[tuple[bool, int], int] | None = None,
+        paused: bool = False,
+    ) -> None:
         self.active_paths = paths
         self._active_paths = {(path.is_yellow, path.robot_id): path for path in paths}
-        self._waypoint_indices = {
+        defaults = {
             key: min(1, len(path.points_mm)) for key, path in self._active_paths.items()
         }
+        self._waypoint_indices = defaults
+        if waypoint_indices is not None:
+            for key, index in waypoint_indices.items():
+                if key in self._active_paths:
+                    self._waypoint_indices[key] = max(
+                        0, min(int(index), len(self._active_paths[key].points_mm))
+                    )
+        self._paused = bool(paused)
+        self._step_mode = False
+        self._step_boundary_indices.clear()
+        self.step_completed = False
+        self.last_waypoint_transitions = ()
+        if paused:
+            self._send_zero_to_active()
+
+    @property
+    def waypoint_indices(self) -> dict[tuple[bool, int], int]:
+        return dict(self._waypoint_indices)
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def pause_execution(self) -> None:
+        if not self._active_paths:
+            raise RuntimeError("No active execution to pause")
+        self._paused = True
+        self._step_mode = False
+        self._step_boundary_indices.clear()
+        self._send_zero_to_active()
+
+    def continue_execution(self) -> None:
+        if not self._active_paths:
+            raise RuntimeError("No active execution to continue")
+        self._paused = False
+        self._step_mode = False
+        self.step_completed = False
+
+    def step_execution(self) -> None:
+        if not self._active_paths or not self._paused:
+            raise RuntimeError("Step requires a paused execution")
+        self._step_boundary_indices = dict(self._waypoint_indices)
+        self._step_mode = True
+        self._paused = False
+        self.step_completed = False
+
+    def restore_waypoint_indices(
+        self, waypoint_indices: dict[tuple[bool, int], int]
+    ) -> None:
+        if not self._active_paths:
+            raise RuntimeError("No active paths are available")
+        for key, index in waypoint_indices.items():
+            if key not in self._active_paths:
+                raise ValueError(f"Checkpoint contains unknown active robot {key}")
+            self._waypoint_indices[key] = max(
+                0, min(int(index), len(self._active_paths[key].points_mm))
+            )
 
     def execute_tick(self, live_robots: dict[tuple[bool, int], LiveRobot]) -> bool:
         """Send one control tick and return True when every path has arrived."""
         if not self._active_paths:
             return True
+        self.last_waypoint_transitions = ()
+        if self._paused and not self._step_mode:
+            return False
         all_arrived = True
+        step_finished = self._step_mode
+        transitions = []
         for key, path in self._active_paths.items():
             robot = live_robots.get(key)
             index = self._waypoint_indices[key]
@@ -279,21 +362,63 @@ class ResearchRuntime:
                     > threshold_mm
                 ):
                     break
+                reached_index = index
                 index += 1
+                transitions.append((key, reached_index))
+                if self._step_mode:
+                    break
             self._waypoint_indices[key] = index
             if index >= len(path.points_mm):
                 self._send_stop(key)
                 continue
+            if self._step_mode and index > self._step_boundary_indices.get(key, index):
+                self._send_stop(key)
+                continue
+            if self._step_mode:
+                step_finished = False
             all_arrived = False
             self._get_sender().send_robot_command(waypoint_command(robot, path.points_mm[index]))
+        self.last_waypoint_transitions = tuple(transitions)
+        if self._step_mode and step_finished:
+            self._send_zero_to_active()
+            self._step_mode = False
+            self._paused = True
+            self.step_completed = True
         return all_arrived
 
     def stop_execution(self) -> None:
-        for key in self._active_paths:
-            self._send_stop(key)
+        self.emergency_stop()
+
+    def emergency_stop(
+        self, extra_robot_keys: tuple[tuple[bool, int], ...] = ()
+    ) -> tuple[str, ...]:
+        """Best-effort zero commands; one failure never skips another robot."""
+        errors = []
+        keys = tuple(dict.fromkeys((*self._active_paths, *extra_robot_keys)))
+        for key in keys:
+            try:
+                self._send_stop(key)
+            except Exception as exc:  # noqa: BLE001 - continue stopping other robots
+                errors.append(f"{key}: {exc}")
         self._active_paths.clear()
         self._waypoint_indices.clear()
         self.active_paths = ()
+        self._paused = False
+        self._step_mode = False
+        self._step_boundary_indices.clear()
+        self.step_completed = False
+        self.last_waypoint_transitions = ()
+        return tuple(errors)
+
+    def send_robot_command(self, command: RobotCommand) -> None:
+        self._get_sender().send_robot_command(command)
+
+    def stop_robot(self, is_yellow: bool, robot_id: int) -> None:
+        self._send_stop((bool(is_yellow), int(robot_id)))
+
+    def _send_zero_to_active(self) -> None:
+        for key in self._active_paths:
+            self._send_stop(key)
 
     def _send_stop(self, key: tuple[bool, int]) -> None:
         is_yellow, robot_id = key

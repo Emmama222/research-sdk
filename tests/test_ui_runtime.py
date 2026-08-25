@@ -10,6 +10,7 @@ from research_sdk.planners import PlannerOutput
 from research_sdk.process_workers.vision_runner import VisionFrameAssembler
 from research_sdk.ui.runtime import (
     LiveRobot,
+    PlannedRobotPath,
     ResearchRuntime,
     live_world_from_vision_packet,
     waypoint_command,
@@ -33,6 +34,10 @@ class _FakeSender:
     def __init__(self) -> None:
         self.destination = (GRSIM_COMMAND_IP, GRSIM_COMMAND_PORT)
         self.sock = _FakeSocket()
+        self.commands = []
+
+    def send_robot_command(self, command) -> None:
+        self.commands.append(command)
 
 
 def test_grsim_connection_probe_reports_route_without_claiming_udp_ack() -> None:
@@ -237,3 +242,51 @@ def test_runtime_only_supplies_obstacles_for_selected_algorithm() -> None:
     runtime.plan(scenario)
 
     assert tuple(obstacle.robot_id for obstacle in CapturingPlanner.received_obstacles) == (2, 3)
+
+
+def test_pause_continue_and_step_preserve_execution_progress() -> None:
+    runtime = ResearchRuntime()
+    sender = _FakeSender()
+    runtime._sender = sender
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (500.0, 0.0), (1000.0, 0.0)))
+    runtime.start_execution((path,))
+
+    runtime.pause_execution()
+    assert runtime.paused
+    assert runtime.waypoint_indices[(True, 1)] == 1
+    assert sender.commands[-1].vx == sender.commands[-1].vy == 0.0
+
+    runtime.continue_execution()
+    runtime.execute_tick({(True, 1): LiveRobot(1, True, (0.0, 0.0), 0.0)})
+    assert sender.commands[-1].vx > 0.0
+
+    runtime.pause_execution()
+    runtime.step_execution()
+    runtime.execute_tick({(True, 1): LiveRobot(1, True, (500.0, 0.0), 0.0)})
+    assert runtime.step_completed
+    assert runtime.paused
+    assert runtime.waypoint_indices[(True, 1)] == 2
+
+
+def test_emergency_stop_attempts_every_robot_after_sender_failure() -> None:
+    class PartlyFailingSender(_FakeSender):
+        def send_robot_command(self, command) -> None:
+            self.commands.append(command)
+            if command.robot_id == 1:
+                raise RuntimeError("sender failed")
+
+    runtime = ResearchRuntime()
+    sender = PartlyFailingSender()
+    runtime._sender = sender
+    runtime.start_execution(
+        (
+            PlannedRobotPath(1, True, ((0.0, 0.0), (1.0, 0.0))),
+            PlannedRobotPath(2, True, ((0.0, 0.0), (1.0, 0.0))),
+        )
+    )
+
+    errors = runtime.emergency_stop()
+
+    assert errors
+    assert [command.robot_id for command in sender.commands] == [1, 2]
+    assert runtime.active_paths == ()
