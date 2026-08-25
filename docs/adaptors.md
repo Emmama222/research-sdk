@@ -67,7 +67,7 @@ Same construction-time-argument rule applies: it's not registered in `AdaptorReg
 `GrSimAdaptor` drives one robot to a target position/orientation in the grSim RoboCup simulator, closed-loop:
 
 ```python
-adaptor = GrSimAdaptor()  # local defaults: command 127.0.0.1:20011, vision multicast 224.5.23.2:10020
+adaptor = GrSimAdaptor()  # local defaults: command 127.0.0.1:20010, vision multicast 224.5.23.2:10020
 result = adaptor.fetch(target_x=1.0, target_y=2.0, target_theta=0.0, robot_id=0, is_yellow=True)
 # {"reached": True, "steps": 42, "final_x": 1.0, "final_y": 2.0, "final_theta": 0.0}
 ```
