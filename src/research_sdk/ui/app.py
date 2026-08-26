@@ -44,6 +44,7 @@ from research_sdk.config import (
     GOAL_DEPTH_MM,
     GOAL_WIDTH_MM,
     ROBOT_RADIUS_MM,
+    VISIBILITY_POLYGON_SIDES,
 )
 from research_sdk.network.ssl_sockets import Vision, grSimVision
 from research_sdk.planners.common import StepRecorder
@@ -320,10 +321,20 @@ class FieldCanvas(QWidget):
         painter.drawRect(QRectF(field.left() - depth, field.center().y() - height / 2, depth, height))
         painter.drawRect(QRectF(field.right(), field.center().y() - height / 2, depth, height))
 
+    def _plan_failed_for(self, robot_id: int, is_yellow: bool) -> bool:
+        """True if the most recent ``plan()`` call marked this robot's path
+        ``failed`` (no route found) -- drawing code uses this to flag the
+        robot red and skip its path line instead of pretending it's fine."""
+        return any(
+            path.robot_id == robot_id and path.is_yellow == is_yellow and path.failed
+            for path in self.paths
+        )
+
     def _draw_robot(self, painter: QPainter, robot: ScenarioRobot, selected: bool) -> None:
         start = self._to_screen(robot.start_mm)
         radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
-        color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
+        failed = self._plan_failed_for(robot.robot_id, robot.is_yellow)
+        color = QColor("#e53935") if failed else QColor("#ffd740" if robot.is_yellow else "#42a5f5")
         painter.setBrush(QColor(color.red(), color.green(), color.blue(), 75))
         painter.setPen(QPen(QColor("white") if selected else color, 3 if selected else 2, Qt.DashLine))
         painter.drawEllipse(start, radius, radius)
@@ -609,10 +620,15 @@ class ScenarioPlannerCanvas(FieldCanvas):
             painter.setBrush(Qt.NoBrush)
             painter.setPen(QPen(QColor(255, 138, 128, 150), 2, Qt.DashLine))
             if "Visibility" in self.planner_label:
+                sides = VISIBILITY_POLYGON_SIDES
+                vertex_radius = inflated / cos(pi / sides)
                 polygon = [
                     centre
-                    + QPointF(inflated * cos(2 * pi * side / 12), -inflated * sin(2 * pi * side / 12))
-                    for side in range(12)
+                    + QPointF(
+                        vertex_radius * cos(2 * pi * side / sides),
+                        -vertex_radius * sin(2 * pi * side / sides),
+                    )
+                    for side in range(sides)
                 ]
                 for first, second in zip(polygon, polygon[1:] + polygon[:1]):
                     painter.drawLine(first, second)
@@ -632,7 +648,8 @@ class ScenarioPlannerCanvas(FieldCanvas):
     ) -> None:
         start = self._to_screen(robot.start_mm)
         radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
-        color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
+        failed = self._plan_failed_for(robot.robot_id, robot.is_yellow)
+        color = QColor("#e53935") if failed else QColor("#ffd740" if robot.is_yellow else "#42a5f5")
         painter.setBrush(
             QColor(color.red(), color.green(), color.blue(), 100)
             if self.show_robot_layer
@@ -1044,6 +1061,16 @@ class ScenarioPlannerPage(QWidget):
             self.file_selector.addItem(path.stem, str(path))
 
     def _plan(self) -> None:
+        """Plan with the single currently-selected planner only.
+
+        Previously looped over every planner in ``self.planner_selector`` to
+        build a preview for all of them at once -- fine as a pure offline
+        preview, but running every planner back-to-back against a live grSim
+        connection turned out to fight the execution model's single
+        ``velocity_owner`` assumption (see ``ExecutionController.run()``,
+        ``ui/execution/controller.py``) in practice. A 3-way comparison still
+        exists, offline and grSim-free: ``scripts/demo_planners.py``.
+        """
         if self.scenario is None:
             QMessageBox.warning(self, "No scenario", "Load or create a scenario first.")
             return
@@ -1052,44 +1079,44 @@ class ScenarioPlannerPage(QWidget):
             QMessageBox.warning(self, "Cannot plan", "\n".join(errors))
             return
 
-        previews: dict[str, PlannerPreview] = {}
-        metrics: dict[str, RunMetrics] = {}
-        failures = []
-        for index in range(self.planner_selector.count()):
-            label = self.planner_selector.itemText(index)
-            planner_cls = self.planner_selector.itemData(index)
-            recorder = StepRecorder()
-            self.runtime.set_planner(planner_cls, record=recorder)
-            try:
-                paths = self.runtime.plan(self.scenario)
-            except Exception as exc:
-                paths = ()
-                failures.append(f"{label}: {exc}")
-            planning_ms = sum(self.runtime.last_plan_durations_ms)
-            map_started = time.perf_counter()
-            nodes, edges = self._debug_geometry(label, recorder)
-            geometry_ms = (time.perf_counter() - map_started) * 1000.0
-            map_ms = recorder.map_time_ms if recorder.map_time_ms is not None else geometry_ms
-            search_ms = (
-                recorder.search_time_ms
-                if recorder.search_time_ms is not None
-                else max(0.0, planning_ms - map_ms)
-            )
-            previews[label] = PlannerPreview(paths, map_ms, search_ms, nodes, edges)
-            run_metrics = RunMetrics()
-            run_metrics.record_pipeline(0.0, map_ms)
-            run_metrics.record_planning(
-                (search_ms,), failures=self.runtime.last_plan_failures
-            )
-            run_metrics.finish(completed=False)
-            metrics[label] = run_metrics
-        self.previews = previews
-        self.metrics = metrics
-        self._planner_changed()
-        self.status.setText(
-            "Planned all algorithms; no velocities sent"
-            + (f" · {'; '.join(failures)}" if failures else "")
+        label = self.planner_selector.currentText()
+        planner_cls = self.planner_selector.currentData()
+        recorder = StepRecorder()
+        self.runtime.set_planner(planner_cls, record=recorder)
+        failure_note = ""
+        try:
+            paths = self.runtime.plan(self.scenario)
+        except Exception as exc:
+            paths = ()
+            failure_note = f" · {label}: {exc}"
+        else:
+            if self.runtime.last_plan_failures:
+                failed_ids = ", ".join(
+                    f"{'Y' if p.is_yellow else 'B'}{p.robot_id}" for p in paths if p.failed
+                )
+                failure_note = (
+                    f" · {self.runtime.last_plan_failures} robot(s) found no route "
+                    f"({failed_ids}) -- flagged red, held in place"
+                )
+        planning_ms = sum(self.runtime.last_plan_durations_ms)
+        map_started = time.perf_counter()
+        nodes, edges = self._debug_geometry(label, recorder)
+        geometry_ms = (time.perf_counter() - map_started) * 1000.0
+        map_ms = recorder.map_time_ms if recorder.map_time_ms is not None else geometry_ms
+        search_ms = (
+            recorder.search_time_ms
+            if recorder.search_time_ms is not None
+            else max(0.0, planning_ms - map_ms)
         )
+        run_metrics = RunMetrics()
+        run_metrics.record_pipeline(0.0, map_ms)
+        run_metrics.record_planning((search_ms,), failures=self.runtime.last_plan_failures)
+        run_metrics.finish(completed=False)
+
+        self.previews = {label: PlannerPreview(paths, map_ms, search_ms, nodes, edges)}
+        self.metrics = {label: run_metrics}
+        self._planner_changed()
+        self.status.setText(f"Planned {label}; no velocities sent{failure_note}")
 
     def _debug_geometry(
         self, label: str, recorder: StepRecorder
