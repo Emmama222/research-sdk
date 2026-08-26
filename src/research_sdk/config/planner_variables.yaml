@@ -13,5 +13,12 @@ voronoi_endpoint_reach_mm: 70.0
 voronoi_escape_margin_mm: 120.0
 voronoi_min_escape_step_mm: 250.0
 
+# Visibility Graph path-planning defaults.
+visibility_polygon_sides: 6
+
+# PRM path-planning defaults.
+prm_num_samples: 20
+prm_k_neighbours: 6
+prm_max_resample_attempts: 5
 
 # other implementation tunnables here

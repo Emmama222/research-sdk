@@ -65,10 +65,11 @@ instead of the original hand-rolled Dijkstra.
 
 ## Visibility Graph + Dijkstra (`planners/VisibilityGraph/visibility_graph.py`)
 
-`plan(request, *, polygon_sides=12) -> PlanResult`
+`plan(request, *, polygon_sides=6) -> PlanResult`
 
-Inflates every obstacle into a `polygon_sides`-gon (approximating the
-Minkowski-sum-inflated circle used in Warthog's TDP), builds a visibility
+Inflates every obstacle into a circumscribed `polygon_sides`-gon (a hexagon
+by default, conservatively approximating the Minkowski-sum-inflated circle
+used in Warthog's TDP), builds a visibility
 graph over start, goal, and every polygon vertex (an edge exists where the
 straight segment between two vertices doesn't cross any obstacle polygon),
 and runs `networkx.dijkstra_path` over that graph. Same direct-line-of-sight

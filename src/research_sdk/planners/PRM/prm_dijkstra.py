@@ -41,7 +41,12 @@ import time
 import networkx as nx
 import numpy as np
 
-from research_sdk.config import ROBOT_RADIUS_MM
+from research_sdk.config import (
+    PRM_K_NEIGHBOURS,
+    PRM_MAX_RESAMPLE_ATTEMPTS,
+    PRM_NUM_SAMPLES,
+    ROBOT_RADIUS_MM,
+)
 from research_sdk.planners.common import Obstacle, PlanRequest, PlanResult, StepRecorder, path_length_mm
 from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, PlannerOutput
 
@@ -82,10 +87,11 @@ def _segment_free(
 def plan(
     request: PlanRequest,
     *,
-    num_samples: int = 20,
-    k_neighbours: int = 6,
-    max_resample_attempts: int = 5,
+    num_samples: int = PRM_NUM_SAMPLES,
+    k_neighbours: int = PRM_K_NEIGHBOURS,
+    max_resample_attempts: int = PRM_MAX_RESAMPLE_ATTEMPTS,
     seed: int | None = 0,
+    skip_direct_path: bool = False,
     record: StepRecorder | None = None,
 ) -> PlanResult:
     """Plan a path with PRM (random milestones + k-NN links) + Dijkstra.
@@ -96,17 +102,26 @@ def plan(
     ``checkLineCollision`` short-circuit), and only fall back to sampling
     when that's blocked.
 
-    ``num_samples=20`` matches the value in TurtleRabbit's recovered
-    calling code (``sample = 20``); their TDP separately reports ``n=10``
-    as their "effective compromise" for path diversity vs. compute cost --
-    left as a tunable here rather than silently picking one, since the two
-    sources disagree and neither documents exactly which config shipped.
+    The default ``num_samples`` (see ``prm_num_samples`` in
+    ``config/planner_variables.yaml``) matches the value in TurtleRabbit's
+    recovered calling code (``sample = 20``); their TDP separately reports
+    ``n=10`` as their "effective compromise" for path diversity vs. compute
+    cost -- left as a tunable rather than silently picking one, since the
+    two sources disagree and neither documents exactly which config
+    shipped.
 
     ``record``, if given a :class:`~research_sdk.planners.common.StepRecorder`,
     gets a log of every sample drawn and every candidate edge tested (see
     ``algorithms.viz.animate_construction``). Leave it ``None`` (the
     default) for normal/timed planning calls -- logging is skipped entirely
     when there's no recorder, so this costs nothing on the hot path.
+
+    ``skip_direct_path=True`` forces PRM sampling even when start and goal
+    see each other directly -- for planner comparisons that want every call
+    measuring the algorithm's actual sampling/roadmap cost, not the trivial
+    straight-line case. Leave it ``False`` (the default) for normal/
+    production planning, where taking the free direct path is exactly the
+    right thing to do.
     """
     start_t = time.perf_counter()
 
@@ -153,7 +168,7 @@ def plan(
 
     # Direct line-of-sight shortcut -- same optimisation as the recovered
     # TurtleRabbit calling code (skip PRM when the straight line is clear).
-    if _segment_free(start, goal, obstacle_centres, radii):
+    if not skip_direct_path and _segment_free(start, goal, obstacle_centres, radii):
         waypoints = (tuple(start), tuple(goal))
         if record is not None:
             record.log("path", waypoints=waypoints, direct=True)

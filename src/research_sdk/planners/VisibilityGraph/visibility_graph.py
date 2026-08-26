@@ -46,15 +46,21 @@ import time
 
 import networkx as nx
 
-from research_sdk.config import ROBOT_RADIUS_MM
-from research_sdk.planners.common import Obstacle, PlanRequest, PlanResult, StepRecorder, path_length_mm
+from research_sdk.config import ROBOT_RADIUS_MM, VISIBILITY_POLYGON_SIDES
+from research_sdk.planners.common import (
+    Obstacle,
+    PlanRequest,
+    PlanResult,
+    StepRecorder,
+    path_length_mm,
+)
 from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, PlannerOutput
 
 Point = tuple[float, float]
 
 
 def _inflate_circle_to_polygon(centre: Point, radius: float, sides: int) -> list[Point]:
-    """Approximate a circle (already inflated by clearance) as a regular polygon.
+    """Conservatively approximate an inflated circle with a regular polygon.
 
     This *is* the "Minkowski Sum considering the radius of a robot" Warthog's
     TDP describes, specialised to a circular base shape (an SSL robot):
@@ -62,10 +68,18 @@ def _inflate_circle_to_polygon(centre: Point, radius: float, sides: int) -> list
     a polygon is what a segment-intersection visibility test needs to work
     against.
     """
+    if sides < 3:
+        raise ValueError("polygon_sides must be at least 3")
     cx, cy = centre
     step = 2.0 * math.pi / sides
+    # Use a circumscribed polygon: the requested clearance is the apothem.
+    # An inscribed hexagon would cut materially inside the collision radius.
+    vertex_radius = radius / math.cos(math.pi / sides)
     return [
-        (cx + radius * math.cos(i * step), cy + radius * math.sin(i * step))
+        (
+            cx + vertex_radius * math.cos(i * step),
+            cy + vertex_radius * math.sin(i * step),
+        )
         for i in range(sides)
     ]
 
@@ -104,16 +118,13 @@ def _segments_intersect(p0: Point, p1: Point, p2: Point, p3: Point) -> bool:
         return True
     if abs(d3) < 1e-9 and _on_segment(p0, p1, p2):
         return True
-    if abs(d4) < 1e-9 and _on_segment(p0, p1, p3):
-        return True
-    return False
+    return bool(abs(d4) < 1e-9 and _on_segment(p0, p1, p3))
 
 
 def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
     """Standard ray-casting point-in-polygon test."""
     x, y = point
     inside = False
-    n = len(polygon)
     xj, yj = polygon[-1]
     for xi, yi in polygon:
         if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi:
@@ -218,7 +229,8 @@ def _visible(
 def plan(
     request: PlanRequest,
     *,
-    polygon_sides: int = 12,
+    polygon_sides: int = VISIBILITY_POLYGON_SIDES,
+    skip_direct_path: bool = False,
     record: StepRecorder | None = None,
 ) -> PlanResult:
     """Plan a path with a Minkowski-inflated visibility graph + Dijkstra.
@@ -237,6 +249,13 @@ def plan(
     gets a log of every polygon inflated and every vertex pair tested for
     visibility (see ``algorithms.viz.animate_construction``). Leave it
     ``None`` (the default) for normal/timed planning calls.
+
+    ``skip_direct_path=True`` forces the full visibility-graph build even
+    when start and goal see each other directly -- for planner comparisons
+    that want every call measuring the algorithm's actual graph-construction
+    cost, not the trivial straight-line case. Leave it ``False`` (the
+    default) for normal/production planning, where taking the free direct
+    path is exactly the right thing to do.
     """
     start_t = time.perf_counter()
 
@@ -276,7 +295,9 @@ def plan(
 
     # Direct line-of-sight shortcut, same as the PRM planner and Warthog's
     # own "adoption of ... a valid collision-free geometric path."
-    if _visible(start, goal, polygons, polygon_centres, polygon_bounding_radii):
+    if not skip_direct_path and _visible(
+        start, goal, polygons, polygon_centres, polygon_bounding_radii
+    ):
         waypoints = (start, goal)
         if record is not None:
             record.log("path", waypoints=waypoints, direct=True)
