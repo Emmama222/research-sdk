@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from math import cos, hypot, sin
 from pathlib import Path
@@ -25,6 +26,7 @@ class PlannedRobotPath:
     robot_id: int
     is_yellow: bool
     points_mm: tuple[tuple[float, float], ...]
+    failed: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +114,7 @@ def planner_key(planner_cls: type | None) -> str | None:
 
 
 class ResearchRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, parallel_planning: bool = True, predict_motion: bool = False) -> None:
         self._sender: grSimSender | None = None
         self._planner = PlannerAPI()
         self._planner_key: str | None = None
@@ -121,6 +123,28 @@ class ResearchRuntime:
         self.last_pipeline_update: WorldPipelineUpdate | None = None
         self.last_plan_durations_ms: tuple[float, ...] = ()
         self.last_plan_failures = 0
+        # Policy switch, not a perf-critical default: each robot's plan() call
+        # is independent (obstacles are a snapshot of the scene, not built from
+        # other robots' *new* paths), so planning them on a thread pool instead
+        # of one at a time is safe. See docs/decisions/0005-parallel-planner-
+        # execution.md for the benchmark data behind this and why a thread pool
+        # (not a process pool) is the default -- flip to False to restore the
+        # old strictly-sequential behaviour for debugging/comparison.
+        self.parallel_planning = parallel_planning
+        # Policy switch, off by default (changes *what* gets planned against,
+        # not just how fast): when True, a robot's teammates/opponents are
+        # sourced from self.world_pipeline.latest_scene (real tracked
+        # position + velocity-projected position and motion-inflated radius,
+        # built by WorldMap.planning_scene() -- see
+        # world/map/world_map.py:370) instead of their static scenario
+        # start_mm. This is planner-agnostic: it swaps the obstacle *source*
+        # before any planner sees it, so VisibilityGraph/PRM/Voronoi all get
+        # the same upgrade with no per-planner code. Falls back to the static
+        # behaviour automatically whenever no live scene exists yet (e.g.
+        # vision hasn't produced a frame since reset), so turning it on is
+        # never destructive. See docs/decisions/0005-parallel-planner-
+        # execution.md, "Future work".
+        self.predict_motion = predict_motion
         self.world_pipeline = VisionWorldPipeline(cameras=4)
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
@@ -194,55 +218,126 @@ class ResearchRuntime:
             self._get_sender().send_packet(ball_packet)
         self.last_send_latency_ms = (perf_counter() - started) * 1000.0
 
+    def _obstacles_for_robot(
+        self, scenario: Scenario, robot
+    ) -> tuple[PlanningObstacle, ...]:
+        scenario_obstacles = tuple(
+            PlanningObstacle(
+                robot_id=obstacle.obstacle_id,
+                isYellow=obstacle.is_yellow,
+                pos_mm=obstacle.position_mm,
+                radius_mm=obstacle.radius_mm,
+                vel_mmps=obstacle.velocity_mmps,
+            )
+            for obstacle in scenario.obstacles_for(self._planner_key)
+        )
+        return scenario_obstacles + self._other_robot_obstacles(scenario, robot)
+
+    def _other_robot_obstacles(
+        self, scenario: Scenario, robot
+    ) -> tuple[PlanningObstacle, ...]:
+        live_scene = self.world_pipeline.latest_scene if self.predict_motion else None
+        if live_scene is not None:
+            robot_key = (robot.is_yellow, robot.robot_id)
+            return tuple(
+                obstacle for obstacle in live_scene.obstacles if obstacle.key != robot_key
+            )
+        # No live tracked scene (predict_motion is off, or vision hasn't
+        # produced a frame yet) -- fall back to each teammate/opponent's
+        # static scenario position, exactly as before this toggle existed.
+        return tuple(
+            PlanningObstacle(
+                robot_id=other.robot_id,
+                isYellow=other.is_yellow,
+                pos_mm=other.start_mm,
+                radius_mm=ROBOT_RADIUS_MM,
+            )
+            for other in scenario.robots
+            if other != robot
+        )
+
+    def _plan_one_robot(self, scenario: Scenario, robot) -> tuple[PlannedRobotPath, float]:
+        """Plan one robot's path and time it.
+
+        On failure, re-raises whatever ``self._planner.plan()`` raised, with
+        the elapsed time up to the failure attached as ``.duration_ms`` --
+        callers use that to keep timing full even for a failed attempt,
+        matching the original serial implementation's ``finally``-based
+        timing.
+
+        Only touches ``self._planner`` (read) and locals -- safe to call from
+        multiple threads at once, one call per robot, since ``scenario`` is a
+        snapshot and each robot's obstacle set is independent of every other
+        robot's *planned* path (only their current ``start_mm``, already
+        fixed before planning starts).
+        """
+        assert robot.target_mm is not None
+        obstacles = self._obstacles_for_robot(scenario, robot)
+        scene = PlanningScene(timestamp=perf_counter(), obstacles=obstacles)
+        started = perf_counter()
+        try:
+            result = self._planner.plan(
+                PlannerInput(
+                    robot_id=robot.robot_id,
+                    is_yellow=robot.is_yellow,
+                    current_pose=(*robot.start_mm, robot.orientation_rad),
+                    target_pose=(*robot.target_mm, robot.orientation_rad),
+                    scene=scene,
+                )
+            )
+        except Exception as exc:
+            exc.duration_ms = (perf_counter() - started) * 1000.0
+            raise
+        duration_ms = (perf_counter() - started) * 1000.0
+        points = [robot.start_mm, *[(p[0], p[1]) for p in result.waypoints]]
+        if points[-1] != robot.target_mm:
+            points.append(robot.target_mm)
+        path = PlannedRobotPath(robot.robot_id, robot.is_yellow, tuple(points))
+        return path, duration_ms
+
+    def _run_and_track(self, robot, call, durations_ms: list[float]) -> PlannedRobotPath:
+        """Run one already-scheduled plan attempt for ``robot``, track its
+        duration and failure count -- shared by both the serial and
+        thread-pool branches of ``plan()`` so they stay behaviourally
+        identical.
+
+        On failure, this does *not* raise or abort the rest of the batch:
+        it returns a stationary (``points_mm`` is just the robot's current
+        position), ``failed=True`` path instead. One robot's planner
+        failure (no route found, etc.) shouldn't stop every other robot
+        from getting a path -- the UI flags a ``failed`` robot red and
+        leaves it in place (see ``app.py``'s ``_draw_robot``/
+        ``_draw_planned_robot``) rather than the whole plan-all-robots call
+        raising.
+        """
+        try:
+            path, duration_ms = call()
+        except Exception as exc:
+            self.last_plan_failures += 1
+            durations_ms.append(getattr(exc, "duration_ms", 0.0))
+            self.last_plan_durations_ms = tuple(durations_ms)
+            return PlannedRobotPath(robot.robot_id, robot.is_yellow, (robot.start_mm,), failed=True)
+        durations_ms.append(duration_ms)
+        return path
+
     def plan(self, scenario: Scenario) -> tuple[PlannedRobotPath, ...]:
         scenario.require_complete()
-        paths = []
-        durations_ms: list[float] = []
         self.last_plan_durations_ms = ()
         self.last_plan_failures = 0
-        for robot in scenario.robots:
-            assert robot.target_mm is not None
-            obstacles = tuple(
-                PlanningObstacle(
-                    robot_id=obstacle.obstacle_id,
-                    isYellow=obstacle.is_yellow,
-                    pos_mm=obstacle.position_mm,
-                    radius_mm=obstacle.radius_mm,
-                    vel_mmps=obstacle.velocity_mmps,
-                )
-                for obstacle in scenario.obstacles_for(self._planner_key)
-            ) + tuple(
-                PlanningObstacle(
-                    robot_id=other.robot_id,
-                    isYellow=other.is_yellow,
-                    pos_mm=other.start_mm,
-                    radius_mm=ROBOT_RADIUS_MM,
-                )
-                for other in scenario.robots
-                if other != robot
-            )
-            scene = PlanningScene(timestamp=perf_counter(), obstacles=obstacles)
-            started = perf_counter()
-            try:
-                result = self._planner.plan(
-                    PlannerInput(
-                        robot_id=robot.robot_id,
-                        is_yellow=robot.is_yellow,
-                        current_pose=(*robot.start_mm, robot.orientation_rad),
-                        target_pose=(*robot.target_mm, robot.orientation_rad),
-                        scene=scene,
-                    )
-                )
-            except Exception:
-                self.last_plan_failures += 1
-                raise
-            finally:
-                durations_ms.append((perf_counter() - started) * 1000.0)
-                self.last_plan_durations_ms = tuple(durations_ms)
-            points = [robot.start_mm, *[(p[0], p[1]) for p in result.waypoints]]
-            if points[-1] != robot.target_mm:
-                points.append(robot.target_mm)
-            paths.append(PlannedRobotPath(robot.robot_id, robot.is_yellow, tuple(points)))
+        robots = list(scenario.robots)
+        durations_ms: list[float] = []
+        paths: list[PlannedRobotPath] = []
+
+        if self.parallel_planning and len(robots) > 1:
+            with ThreadPoolExecutor(max_workers=len(robots)) as executor:
+                futures = [executor.submit(self._plan_one_robot, scenario, robot) for robot in robots]
+                for robot, future in zip(robots, futures):
+                    paths.append(self._run_and_track(robot, future.result, durations_ms))
+        else:
+            for robot in robots:
+                call = lambda robot=robot: self._plan_one_robot(scenario, robot)
+                paths.append(self._run_and_track(robot, call, durations_ms))
+
         self.last_plan_durations_ms = tuple(durations_ms)
         return tuple(paths)
 
