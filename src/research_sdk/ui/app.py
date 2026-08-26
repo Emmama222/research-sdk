@@ -437,7 +437,10 @@ class FieldCanvas(QWidget):
 @dataclass(frozen=True, slots=True)
 class PlannerPreview:
     paths: tuple[PlannedRobotPath, ...]
-    map_time_ms: float
+    # None means this planner has no real map-vs-search split available
+    # (no StepRecorder support) -- see _plan()'s comment for why that must
+    # not be papered over with a fabricated number.
+    map_time_ms: float | None
     planning_time_ms: float
     nodes: tuple[tuple[float, float], ...] = ()
     edges: tuple[tuple[tuple[float, float], tuple[float, float]], ...] = ()
@@ -1099,17 +1102,36 @@ class ScenarioPlannerPage(QWidget):
                     f"({failed_ids}) -- flagged red, held in place"
                 )
         planning_ms = sum(self.runtime.last_plan_durations_ms)
-        map_started = time.perf_counter()
         nodes, edges = self._debug_geometry(label, recorder)
-        geometry_ms = (time.perf_counter() - map_started) * 1000.0
-        map_ms = recorder.map_time_ms if recorder.map_time_ms is not None else geometry_ms
-        search_ms = (
-            recorder.search_time_ms
-            if recorder.search_time_ms is not None
-            else max(0.0, planning_ms - map_ms)
-        )
+        if recorder.map_time_ms is not None:
+            # A full build happened this call and logged into StepRecorder
+            # -- all three planners support this now (VisibilityGraph, PRM,
+            # and VoronoiDijkstraPlanner via a coarser two-timestamp split,
+            # see voronoi_dijkstra.py's plan() docstring) -- a real
+            # map-vs-search split.
+            map_ms: float | None = recorder.map_time_ms
+            search_ms = (
+                recorder.search_time_ms
+                if recorder.search_time_ms is not None
+                else max(0.0, planning_ms - map_ms)
+            )
+        else:
+            # This call took a direct-line-of-sight or reused-previous-path
+            # shortcut and never built anything, so there's genuinely no map
+            # cost to report -- not a planner limitation. (Voronoi used to
+            # have no recorder support at all, and this branch used to fall
+            # back to timing _debug_geometry()'s *separate*, cheaper
+            # debug-only map build and subtracting it from the total, which
+            # dumped almost the entire real map-generation cost into
+            # "search" whenever Voronoi *did* do a full build -- confirmed
+            # wrong by decision 6 in docs/decisions/0005-parallel-planner-
+            # execution.md: swapping its search implementation changed
+            # nothing. Fixed by giving Voronoi real recorder support instead
+            # of working around the gap.) Show the honest total.
+            map_ms = None
+            search_ms = planning_ms
         run_metrics = RunMetrics()
-        run_metrics.record_pipeline(0.0, map_ms)
+        run_metrics.record_pipeline(0.0, map_ms or 0.0)
         run_metrics.record_planning((search_ms,), failures=self.runtime.last_plan_failures)
         run_metrics.finish(completed=False)
 
@@ -1169,8 +1191,17 @@ class ScenarioPlannerPage(QWidget):
         self.canvas.planner_key = planner_key(self.planner_selector.currentData())
         self.canvas.set_preview(preview, label)
         if label in self.previews:
-            self.map_time.setText(f"Map: {preview.map_time_ms:.3f} ms")
-            self.plan_time.setText(f"Plan: {preview.planning_time_ms:.3f} ms")
+            if preview.map_time_ms is not None:
+                self.map_time.setText(f"Map: {preview.map_time_ms:.3f} ms")
+                self.plan_time.setText(f"Plan (search only): {preview.planning_time_ms:.3f} ms")
+            else:
+                # All three planners support a real map-vs-search split when
+                # they actually build one (see StepRecorder usage in each
+                # planners/*.py plan()) -- None here means *this call* took a
+                # direct-line-of-sight/reused-previous-path shortcut and
+                # never built anything, not that the planner lacks support.
+                self.map_time.setText("Map: n/a (shortcut taken, no full build)")
+                self.plan_time.setText(f"Plan (total): {preview.planning_time_ms:.3f} ms")
         else:
             self.map_time.setText("Map: -- ms")
             self.plan_time.setText("Plan: -- ms")
