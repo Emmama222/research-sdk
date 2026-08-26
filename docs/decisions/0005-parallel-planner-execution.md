@@ -186,43 +186,6 @@ of losing every other robot's plan because of it.
    what if the robot has already arrived?) deliberately left undecided
    here rather than guessed at.
 
-## Future work (not started -- noted for later)
-
-**Robots don't currently avoid each other's *planned paths*, only each
-other's current position.** `ResearchRuntime._obstacles_for_robot`
-(`ui/runtime.py`) builds every other robot as a static `PlanningObstacle` at
-`other.start_mm` with `vel_mmps` defaulted to `(0, 0)` -- so whether robots
-are planned serially or in parallel (decision 1), none of them know about
-teammates' newly-computed routes. Two robots can each produce an
-individually valid path that still crosses another robot's route mid-run.
-This is a correctness gap, not a concurrency one -- running the same
-independent per-robot calls faster doesn't fix it.
-
-The standard fix is **prioritized (sequential) planning**: plan robot 1
-with no knowledge of the others, then plan robot 2 treating robot 1's
-*entire chosen path* (as a time-windowed corridor, not just a static
-circle) as a dynamic obstacle, then robot 3 against robots 1+2's paths, and
-so on. A single fully joint plan (one search over the combined
-configuration space of all robots at once) would be the "more correct"
-version of this, but blows up combinatorially with robot count -- not
-something to reach for at 6 robots without a strong reason.
-
-**This is in direct tension with decision 1.** Prioritized planning is
-inherently sequential -- robot N's scene depends on robot N-1's
-already-computed path -- which conflicts with parallelizing robots'
-independent plan calls for UI responsiveness. Adopting it would trade some
-or all of decision 1's concurrency for inter-robot collision correctness,
-which is a real trade worth making deliberately, not a drop-in addition.
-
-No action taken on the prioritized-planning idea itself -- explicitly
-deferred per request, to revisit when there's time to design it properly
-(robot ordering/priority scheme, how a "planned path so far" becomes a
-time-windowed obstacle, and how far to relax decision 1's parallelism to
-make room for it). The separate, smaller gap this future-work note
-originally flagged alongside it -- that the codebase's existing
-velocity/prediction mechanism was never wired into any planning call path
--- **has since been closed**; see decision 5 above.
-
 6. **All three planners now search with the same shortest-path
    implementation, `networkx.dijkstra_path`.** `VoronoiDijkstraPlanner._dijkstra`
    (`voronoi_dijkstra.py`) was a hand-rolled heapq Dijkstra --
@@ -275,7 +238,108 @@ velocity/prediction mechanism was never wired into any planning call path
    renamed and rewritten (`test_preview_plans_selected_algorithm_only_without_starting_execution`)
    to assert the new one-planner-per-click contract.
 
-## Future work (additional items, not started)
+9. **`voronoi_density_percent` and `voronoi_max_density_nodes` were tuned
+   down (60.0 → 10.0, 140 → 100), and it's a real speed win with a real,
+   only partially validated cost.** Root cause behind finding 1's 35ms
+   Voronoi number: the density-grid "grounding" sites that close off
+   otherwise-unbounded Voronoi cells near the field boundary (a legitimate,
+   necessary technique, not a bug) scale directly with these two config
+   values. Swept before changing anything
+   (`scripts/benchmark_planners.py`-style direct sweep, 90 samples/config
+   across the two saved scenarios):
+
+   | Config | median time | avg path length |
+   |---|---|---|
+   | old (60%, 140) | 35.9 ms | 3625 mm |
+   | new (10%, 100) | ~5.3 ms | ~4500 mm (measured at 10%/80, not re-measured at the exact 10%/100 now shipped) |
+
+   Re-ran `scripts/benchmark_planners.py` after the config change landed:
+   Voronoi is now the *fastest* of the three (~5.3ms), not the slowest --
+   the ordering in finding 1 is no longer current. Success rate held at
+   100% in every config tested down to 10% density, but that is **not**
+   strong evidence the lower density is safe in general: it's still only
+   the same 2 saved scenarios and a light 3-8-obstacle stress test, not a
+   dense/adversarial scenario designed to stress connectivity. Path length
+   grew ~24% at the sparsest configs tested (3625mm → ~4500mm) -- a real,
+   not negligible, quality cost for the speed win, and it applied fairly
+   uniformly between 10% and 30% density in the sweep (the "knee" was
+   between 30% and 60%, not between 10% and 30%).
+
+   Not done as part of this decision: a denser/adversarial validation
+   scenario to confirm 10%/100 doesn't silently start failing outside the
+   two saved scenarios, and a final call on whether 10%/100 is the number
+   this project reports in the paper versus a middle ground (30% looked
+   like most of the speed win without going as far into the length
+   penalty in the earlier sweep). Both explicitly left open.
+
+10. **`VoronoiDijkstraPlanner.plan()` gained real `StepRecorder` support, and
+    a UI display bug that predates it got fixed as a result.** It's a
+    coarser split than `visibility_graph.py`/`prm_dijkstra.py`'s per-edge/
+    per-sample logging -- two timestamps bracketing (a) the
+    `generate_voronoi_map_from_scene()` call plus splicing start/target
+    into the graph, and (b) the `self._dijkstra(...)` call -- because map
+    generation happens inside a separate module (`voronoi_generator.py`)
+    that doesn't accept a recorder; threading `record` through that
+    module's internals for per-step granularity wasn't judged worth it for
+    a "map vs. search" split. Wired through `PlannerInput` (gained a
+    `record` field, `waypoint_manager.py`), `VoronoiWaypointManager.update()`
+    (passes it to the `VoronoiDijkstraPlanner` it constructs per call), and
+    `ResearchRuntime` (`self._recorder`, set in `set_planner()`, attached to
+    every `PlannerInput` built in `_plan_one_robot()`).
+
+    This closed a real bug in `ScenarioPlannerPage._plan()`'s "Map"/"Plan"
+    UI labels, found by inspection while explaining why they looked odd for
+    Voronoi: because Voronoi had no recorder, `_plan()` fell back to timing
+    `_debug_geometry()`'s *separate*, cheaper debug-only Voronoi map build
+    (render density/node-count, not the real planning ones) and subtracted
+    that from the real total -- which dumped almost the entire real
+    map-generation cost into the "Plan" (search) label, making Voronoi look
+    search-bound when finding 1 and decision 6 both already showed it isn't
+    (search is cheap; map generation is where the time goes). `PlannerPreview.map_time_ms`
+    is now `float | None`: `None` means *this call* took a direct-path/
+    reused-previous-path shortcut and never built anything (true for any of
+    the three planners, not a Voronoi-specific limitation anymore), shown
+    as "Map: n/a (shortcut taken, no full build)" / "Plan (total): X ms";
+    a real split shows as "Map: X ms" / "Plan (search only): X ms". Two new
+    tests in `tests/test_scenario_planner_ui.py` lock in both cases for
+    Voronoi specifically (shortcut-taken and forced-full-build).
+
+## Future work (not started)
+
+**Robots don't currently avoid each other's *planned paths*, only each
+other's current position.** `ResearchRuntime._obstacles_for_robot`
+(`ui/runtime.py`) builds every other robot as a static `PlanningObstacle` at
+`other.start_mm` with `vel_mmps` defaulted to `(0, 0)` -- so whether robots
+are planned serially or in parallel (decision 1), none of them know about
+teammates' newly-computed routes. Two robots can each produce an
+individually valid path that still crosses another robot's route mid-run.
+This is a correctness gap, not a concurrency one -- running the same
+independent per-robot calls faster doesn't fix it.
+
+The standard fix is **prioritized (sequential) planning**: plan robot 1
+with no knowledge of the others, then plan robot 2 treating robot 1's
+*entire chosen path* (as a time-windowed corridor, not just a static
+circle) as a dynamic obstacle, then robot 3 against robots 1+2's paths, and
+so on. A single fully joint plan (one search over the combined
+configuration space of all robots at once) would be the "more correct"
+version of this, but blows up combinatorially with robot count -- not
+something to reach for at 6 robots without a strong reason.
+
+**This is in direct tension with decision 1.** Prioritized planning is
+inherently sequential -- robot N's scene depends on robot N-1's
+already-computed path -- which conflicts with parallelizing robots'
+independent plan calls for UI responsiveness. Adopting it would trade some
+or all of decision 1's concurrency for inter-robot collision correctness,
+which is a real trade worth making deliberately, not a drop-in addition.
+
+No action taken on the prioritized-planning idea itself -- explicitly
+deferred per request, to revisit when there's time to design it properly
+(robot ordering/priority scheme, how a "planned path so far" becomes a
+time-windowed obstacle, and how far to relax decision 1's parallelism to
+make room for it). The separate, smaller gap this future-work note
+originally flagged alongside it -- that the codebase's existing
+velocity/prediction mechanism was never wired into any planning call path
+-- has since been closed (decision 5).
 
 - **A dedicated results/export folder.** `scripts/demo_planners.py` writes
   `demo_output.png` to the repo root; the intent is a proper results/export
@@ -300,16 +364,25 @@ velocity/prediction mechanism was never wired into any planning call path
   well-defined addition (one shared `validate_path(...)` check reusable
   across all three planners' outputs) rather than a large new subsystem,
   given the ACRA submission deadline this work is targeting.
+- **A denser/adversarial validation scenario for decision 9's config
+  change** -- the two saved scenarios and a light stress test aren't enough
+  to trust 10%/100 density is safe outside of them. Needed before treating
+  those numbers as final for the paper.
+- **A final call on the exact production density config** -- decision 9
+  shipped 10%/100 but flagged 30% as a possible middle ground; not yet
+  decided which one is the number this project reports.
 
 ## Status
 
-Accepted and implemented: decisions 1, 3, 4, 5, 6, 7, and 8 are live in
-`ui/runtime.py`, `ui/app.py`, `voronoi_dijkstra.py`,
-`visibility_graph.py`, `prm_dijkstra.py`, and `scripts/demo_planners.py`;
-all tests pass. Decision 2 (process pool) remains deliberately deferred, as
-does the prioritized-planning idea and the policy/validation-layer idea in
-"Future work". Revisit when: (a) real per-tick planning latency for a full
-6-robot team becomes a measured bottleneck (not just single-robot cases),
-which is when the process-pool restructuring in decision 2 earns its
-complexity, or (b) `VoronoiDijkstraPlanner`'s own per-call cost is addressed
-directly (density-grid tuning) rather than worked around with concurrency.
+Accepted and implemented: decisions 1, 3, 4, 5, 6, 7, 8, 9, and 10 are live
+in `ui/runtime.py`, `ui/app.py`, `voronoi_dijkstra.py`,
+`waypoint_manager.py`, `visibility_graph.py`, `prm_dijkstra.py`,
+`planner_variables.yaml`, and `scripts/demo_planners.py`; all tests pass.
+Decision 2 (process pool) remains deliberately deferred, as does the
+prioritized-planning idea and the policy/validation-layer idea in "Future
+work" -- and decision 9 opened two more open items there (validation
+scenario, final density number). Revisit decision 2 when real per-tick
+planning latency for a full 6-robot team becomes a measured bottleneck (not
+just single-robot cases); revisit decision 9's open items before the
+planner-comparison numbers go into the paper, since they're currently the
+least validated claim in this document.
