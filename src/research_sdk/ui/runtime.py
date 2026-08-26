@@ -118,6 +118,7 @@ class ResearchRuntime:
         self._sender: grSimSender | None = None
         self._planner = PlannerAPI()
         self._planner_key: str | None = None
+        self._recorder = None
         self.last_send_latency_ms: float | None = None
         self.last_receive_latency_ms: float | None = None
         self.last_pipeline_update: WorldPipelineUpdate | None = None
@@ -283,6 +284,7 @@ class ResearchRuntime:
                     current_pose=(*robot.start_mm, robot.orientation_rad),
                     target_pose=(*robot.target_mm, robot.orientation_rad),
                     scene=scene,
+                    record=self._recorder,
                 )
             )
         except Exception as exc:
@@ -348,13 +350,20 @@ class ResearchRuntime:
         lower-level ``.plan(scene, start, target, ...)`` signature (it is
         VoronoiWaypointManager's internal building block, not itself a
         PlannerAPI-shaped planner) -- selecting it maps back onto the default
-        ``PlannerAPI()`` rather than instantiating it directly.
+        ``PlannerAPI()`` rather than instantiating it directly. ``record`` is
+        stashed on ``self._recorder`` for this branch and attached to every
+        ``PlannerInput`` built in ``_plan_one_robot`` instead, since
+        ``PlannerAPI``/``VoronoiWaypointManager`` construct a fresh
+        ``VoronoiDijkstraPlanner`` per call rather than taking one at
+        construction time the way ``VisibilityGraphPlanner``/``PRMPlanner`` do.
         """
         self._planner_key = planner_key(planner_cls)
         if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
             self._planner = PlannerAPI()
+            self._recorder = record
         else:
             self._planner = planner_cls(**({"record": record} if record is not None else {}))
+            self._recorder = None
 
     def reset_planner(self) -> None:
         self._planner.reset()

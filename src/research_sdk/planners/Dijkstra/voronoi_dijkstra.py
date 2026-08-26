@@ -29,6 +29,7 @@ from research_sdk.config import (
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_TARGET_DEAD_ZONE_MM,
 )
+from research_sdk.planners.common import StepRecorder
 from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.map.voronoi.voronoi_generator import (
     VoronoiObstacle,
@@ -97,6 +98,7 @@ class VoronoiDijkstraPlanner:
         previous_state: PlannerState | None = None,
         stay_in_field: bool = True,
         skip_direct_path: bool = False,
+        record: StepRecorder | None = None,
     ) -> PlanResult:
         """Return waypoints from *start_pos_mm* toward *target_pos_mm*.
 
@@ -114,6 +116,21 @@ class VoronoiDijkstraPlanner:
         direct path is exactly the right thing to do. Does not affect the
         escape-waypoint or reused-previous-path shortcuts below, which are
         different mechanisms from the direct-line-of-sight check.
+
+        *record*, if given a
+        :class:`~research_sdk.planners.common.StepRecorder`, gets a coarse
+        map-vs-search split: one ``"map"`` event bracketing the Voronoi map
+        build (``generate_voronoi_map_from_scene`` plus splicing start/target
+        into the graph) and one ``"path"`` event when the Dijkstra search
+        finishes. This is coarser than ``visibility_graph.py``/
+        ``prm_dijkstra.py``'s per-edge/per-sample logging (those log every
+        candidate tested; this logs only phase boundaries), because map
+        generation here happens inside a separate module
+        (``voronoi_generator.py``) that doesn't accept a recorder -- adding
+        two timestamps around the existing call boundaries was enough to
+        get a real split without threading ``record`` through that module's
+        internals too. Leave it ``None`` (the default) for normal/timed
+        planning calls, matching the other two planners.
         """
         if ignore_robots is None:
             ignore_robots = set()
@@ -159,6 +176,8 @@ class VoronoiDijkstraPlanner:
                 reused_previous=True,
             )
 
+        if record is not None:
+            record.log("map_started")
         voronoi_map = generate_voronoi_map_from_scene(
             scene,
             now_s=now_s,
@@ -195,6 +214,9 @@ class VoronoiDijkstraPlanner:
             obstacles,
         )
 
+        if record is not None:
+            record.log("map_built", node_count=len(node_pos))
+
         if self.START_ID not in adjacency or self.TARGET_ID not in adjacency:
             return PlanResult(target_mm=target, waypoints_mm=())
 
@@ -222,6 +244,8 @@ class VoronoiDijkstraPlanner:
             return PlanResult(target_mm=target, waypoints_mm=())
 
         waypoints = (*intermediate, target)
+        if record is not None:
+            record.log("path", waypoints=waypoints, direct=False)
         return PlanResult(target_mm=target, waypoints_mm=waypoints)
 
     def _escape_waypoint_from_containing_obstacles(

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Iterable
 
+from research_sdk.planners.common import StepRecorder
 from research_sdk.planners.Dijkstra.voronoi_dijkstra import (
     PlannerState,
     VoronoiDijkstraPlanner,
@@ -50,6 +51,7 @@ class PlannerInput:
     scene: PlanningScene | None = None
     now_s: float | None = None
     stay_in_field: bool = True
+    record: StepRecorder | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -232,6 +234,7 @@ class VoronoiWaypointManager:
                 ignore_robots=ignore_robots,
                 previous_state=previous,
                 stay_in_field=planner_input.stay_in_field,
+                record=planner_input.record,
             )
             state.waypoints = tuple(
                 _with_heading(point, target_pose[2])
