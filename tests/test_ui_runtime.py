@@ -1,4 +1,4 @@
-import pytest
+from typing import ClassVar
 
 from research_sdk.config import (
     GRSIM_COMMAND_IP,
@@ -16,6 +16,7 @@ from research_sdk.ui.runtime import (
     waypoint_command,
 )
 from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot
+from research_sdk.world.scene import PlanningObstacle, PlanningScene
 from research_sdk.world.snapshot import world_snapshot_from_frame
 
 
@@ -185,6 +186,10 @@ def test_waypoint_command_uses_robot_speed_clamping() -> None:
 
 
 def test_runtime_records_failed_planner_invocation() -> None:
+    """A robot whose planner raises gets flagged failed/stationary, not a
+    raised exception -- one bad route shouldn't abort every other robot's
+    plan (see docs/decisions/0005-parallel-planner-execution.md)."""
+
     class FailingPlanner:
         def plan(self, _planner_input):
             raise RuntimeError("no route")
@@ -196,9 +201,11 @@ def test_runtime_records_failed_planner_invocation() -> None:
         robots=[ScenarioRobot(1, True, (0.0, 0.0), (1000.0, 0.0))],
     )
 
-    with pytest.raises(RuntimeError, match="no route"):
-        runtime.plan(scenario)
+    paths = runtime.plan(scenario)
 
+    assert len(paths) == 1
+    assert paths[0].failed is True
+    assert paths[0].points_mm == ((0.0, 0.0),)
     assert runtime.last_plan_failures == 1
     assert len(runtime.last_plan_durations_ms) == 1
     assert runtime.last_plan_durations_ms[0] >= 0.0
@@ -242,6 +249,109 @@ def test_runtime_only_supplies_obstacles_for_selected_algorithm() -> None:
     runtime.plan(scenario)
 
     assert tuple(obstacle.robot_id for obstacle in CapturingPlanner.received_obstacles) == (2, 3)
+
+
+class _CapturingPlanner:
+    """Records each robot's obstacle list by robot_id, keyed per-call --
+    both robots in a scenario get planned (possibly concurrently, see
+    ResearchRuntime.parallel_planning), so a single shared attribute would
+    just be overwritten by whichever robot happens to be planned last."""
+
+    received_obstacles_by_robot: ClassVar[dict[int, tuple]] = {}
+
+    def plan(self, planner_input):
+        type(self).received_obstacles_by_robot[planner_input.robot_id] = (
+            planner_input.scene.obstacles
+        )
+        return PlannerOutput(
+            waypoints=(),
+            current_waypoint_index=0,
+            active_target_pose=planner_input.target_pose,
+            is_path_free=True,
+            need_reroute=False,
+            did_reroute=False,
+        )
+
+    def reset(self):
+        pass
+
+
+def _two_robot_scenario() -> Scenario:
+    return Scenario(
+        "teammates",
+        robots=[
+            ScenarioRobot(1, True, (0.0, 0.0), (1000.0, 0.0)),
+            ScenarioRobot(2, True, (500.0, 500.0), (1500.0, 500.0)),
+        ],
+    )
+
+
+def test_predict_motion_off_uses_static_teammate_positions() -> None:
+    """Default behaviour (predict_motion=False): teammates are sourced from
+    their static scenario start_mm, regardless of whether a live tracked
+    scene happens to exist -- unaffected by decision 5 in
+    docs/decisions/0005-parallel-planner-execution.md unless explicitly
+    turned on."""
+    _CapturingPlanner.received_obstacles_by_robot.clear()
+    runtime = ResearchRuntime(predict_motion=False)
+    runtime.world_pipeline.latest_scene = PlanningScene(
+        timestamp=0.0,
+        obstacles=(
+            PlanningObstacle(robot_id=2, isYellow=True, pos_mm=(9999.0, 9999.0), radius_mm=90.0),
+        ),
+    )
+    runtime.set_planner(_CapturingPlanner)
+
+    runtime.plan(_two_robot_scenario())
+
+    robot1_view = _CapturingPlanner.received_obstacles_by_robot[1]
+    teammate = next(o for o in robot1_view if o.robot_id == 2)
+    assert teammate.pos_mm == (500.0, 500.0), "should use scenario start_mm, not the live scene"
+
+
+def test_predict_motion_on_sources_teammates_from_live_scene() -> None:
+    """predict_motion=True with a live tracked scene: teammate/opponent
+    obstacles come from the real tracked position/velocity/dynamic radius
+    (WorldMap.planning_scene()) instead of static scenario positions, and
+    the robot being planned for is excluded from its own obstacle list."""
+    _CapturingPlanner.received_obstacles_by_robot.clear()
+    runtime = ResearchRuntime(predict_motion=True)
+    runtime.world_pipeline.latest_scene = PlanningScene(
+        timestamp=0.0,
+        obstacles=(
+            PlanningObstacle(
+                robot_id=2, isYellow=True, pos_mm=(600.0, 550.0), radius_mm=90.0, vel_mmps=(1000.0, 0.0)
+            ),
+            PlanningObstacle(robot_id=1, isYellow=True, pos_mm=(0.0, 0.0), radius_mm=90.0),
+        ),
+    )
+    runtime.set_planner(_CapturingPlanner)
+
+    runtime.plan(_two_robot_scenario())
+
+    robot1_view = _CapturingPlanner.received_obstacles_by_robot[1]
+    robot_ids = {o.robot_id for o in robot1_view}
+    assert robot_ids == {2}, "robot 1 must be excluded from its own obstacle list"
+    teammate = next(o for o in robot1_view if o.robot_id == 2)
+    assert teammate.pos_mm == (600.0, 550.0)
+    assert teammate.vel_mmps == (1000.0, 0.0)
+
+
+def test_predict_motion_on_falls_back_when_no_live_scene_exists() -> None:
+    """predict_motion=True but vision hasn't produced a frame yet (fresh
+    reset, or the scenario editor's offline "Plan" preview, which runs with
+    no simulator/vision attached at all): falls back to the static
+    behaviour automatically rather than raising or returning no obstacles."""
+    _CapturingPlanner.received_obstacles_by_robot.clear()
+    runtime = ResearchRuntime(predict_motion=True)
+    assert runtime.world_pipeline.latest_scene is None
+    runtime.set_planner(_CapturingPlanner)
+
+    runtime.plan(_two_robot_scenario())
+
+    robot1_view = _CapturingPlanner.received_obstacles_by_robot[1]
+    teammate = next(o for o in robot1_view if o.robot_id == 2)
+    assert teammate.pos_mm == (500.0, 500.0)
 
 
 def test_pause_continue_and_step_preserve_execution_progress() -> None:

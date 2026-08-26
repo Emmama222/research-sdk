@@ -104,7 +104,12 @@ def test_target_tool_is_guarded_without_starting_robot(planner_page) -> None:
     assert not page.tool_buttons["target_pos"].isEnabled()
 
 
-def test_preview_plans_all_algorithms_without_starting_execution(planner_page) -> None:
+def test_preview_plans_selected_algorithm_only_without_starting_execution(planner_page) -> None:
+    """"Plan" only runs the currently-selected planner, not every planner in
+    the dropdown -- running all of them back-to-back fought the execution
+    model's single ``velocity_owner`` assumption once tried against a live
+    grSim connection. A 3-way comparison still exists, offline and
+    grSim-free: ``scripts/demo_planners.py``."""
     page = planner_page
     page.scenario = Scenario(
         "preview",
@@ -112,10 +117,13 @@ def test_preview_plans_all_algorithms_without_starting_execution(planner_page) -
         obstacles=[ScenarioObstacle(2, False, (0.0, 800.0), 90.0)],
     )
     page._install_scenario("ready")
+    assert page.planner_selector.count() == 3
 
     page._plan()
 
-    assert len(page.previews) == page.planner_selector.count() == 3
+    assert len(page.previews) == 1
+    selected_label = page.planner_selector.currentText()
+    assert set(page.previews) == {selected_label}
     assert page.runtime.active_paths == ()
     assert all(preview.map_time_ms >= 0.0 for preview in page.previews.values())
     assert all(preview.planning_time_ms >= 0.0 for preview in page.previews.values())

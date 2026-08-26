@@ -10,6 +10,18 @@ def test_direct_path_when_clear():
     assert "skipped" in result.message
 
 
+def test_skip_direct_path_forces_full_sampling_even_when_clear():
+    """Same clear-field request as test_direct_path_when_clear, but with
+    skip_direct_path=True -- used by the offline planner comparison
+    (scripts/demo_planners.py) so every trial measures PRM's actual
+    sampling/roadmap cost, not the trivial straight-line case."""
+    request = PlanRequest(start_mm=(-1000.0, 0.0), goal_mm=(1000.0, 0.0), obstacles=())
+    result = plan(request, seed=1, num_samples=20, skip_direct_path=True)
+    assert result.success
+    assert "skipped" not in result.message
+    assert result.nodes_expanded > 2, "should have sampled milestones, not just start+goal"
+
+
 def test_routes_around_single_obstacle():
     obstacle = Obstacle(pos_mm=(0.0, 0.0), radius_mm=200.0, robot_id=1)
     request = PlanRequest(
