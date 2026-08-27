@@ -1,0 +1,10 @@
+# Robot motion limits used by outgoing commands.
+# Linear and kick speeds are expressed in metres per second.
+max_linear_speed_mps: 5.0
+max_angular_speed_rad_s: 3.0
+
+# Minimum fraction of max angular speed allowed while translating slowly.
+# The allowance ramps to 100% as linear speed approaches its maximum.
+max_angular_linear_ratio: 0.5
+flat_kick_speed_mps: 4.0
+chip_kick_speed_mps: 0.0

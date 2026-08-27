@@ -1,0 +1,24 @@
+# Local interface used to join SSL multicast groups. Use 0.0.0.0 to let the
+# operating system select the interface.
+multicast_interface_ip: 0.0.0.0
+
+# SSL-Vision detection and geometry packets.
+ssl_vision_multicast_group: 224.5.23.2
+ssl_vision_port: 10006
+
+# SSL-Vision tracked packets.
+ssl_vision_tracker_multicast_group: 224.5.23.2
+ssl_vision_tracker_port: 10010
+
+# SSL game-controller/referee packets.
+ssl_game_controller_multicast_group: 224.5.23.1
+ssl_game_controller_port: 10003
+
+# grSim endpoints.
+grsim_vision_port: 10020
+grsim_command_ip: 127.0.0.1
+grsim_command_port: 20010
+
+# Onboard robot telemetry received by RobotRecv.
+robot_telemetry_bind_ip: 0.0.0.0
+robot_telemetry_port: 50513
