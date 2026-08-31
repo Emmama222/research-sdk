@@ -279,6 +279,9 @@ class ExecutionConsolePage(QWidget):
         self.motion_stop_timer = QTimer(self)
         self.motion_stop_timer.setSingleShot(True)
         self.motion_stop_timer.timeout.connect(self._finish_motion_test)
+        self.motion_command_timer = QTimer(self)
+        self.motion_command_timer.setInterval(50)
+        self.motion_command_timer.timeout.connect(self._send_motion_test_command)
         self.watchdog_timer = QTimer(self)
         self.watchdog_timer.setInterval(100)
         self.watchdog_timer.timeout.connect(self._watchdog_tick)
@@ -290,10 +293,10 @@ class ExecutionConsolePage(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         top = QGridLayout()
-        self.route_test_button = QPushButton("UDP route test")
+        self.vision_test_button = QPushButton("Vision health test")
         self.motion_test_button = QPushButton("Motion feedback test")
-        self.connection_status = QLabel("Connection not tested")
-        top.addWidget(self.route_test_button, 0, 0)
+        self.connection_status = QLabel("Vision not tested")
+        top.addWidget(self.vision_test_button, 0, 0)
         top.addWidget(self.motion_test_button, 1, 0)
         top.addWidget(self.connection_status, 2, 0)
 
@@ -400,7 +403,7 @@ class ExecutionConsolePage(QWidget):
         root.addWidget(self.summary)
         root.addWidget(self.error_label)
 
-        self.route_test_button.clicked.connect(self._route_test)
+        self.vision_test_button.clicked.connect(self._vision_test)
         self.motion_test_button.clicked.connect(self._motion_test)
         self.refresh_button.clicked.connect(self.refresh_scenarios)
         self.add_scenario_button.clicked.connect(self.navigate_to_planner.emit)
@@ -905,15 +908,30 @@ class ExecutionConsolePage(QWidget):
         self._populate_table(self.result_a_table, self.result_rows_a)
         self._populate_table(self.result_b_table, self.result_rows_b)
 
-    def _route_test(self) -> None:
-        try:
-            probe = self.runtime.test_grsim_connection()
+    def _vision_test(self) -> None:
+        snapshot = self.runtime.world_snapshot
+        if snapshot is None or self._last_snapshot_received_at is None:
             self.connection_status.setText(
-                f"Route {probe.local_address[0]}:{probe.local_address[1]} → "
-                f"{probe.destination[0]}:{probe.destination[1]} (UDP, no acknowledgement)"
+                "FAIL · no complete grSim vision snapshot received"
             )
-        except Exception as exc:
-            self.connection_status.setText(f"Route test failed: {exc}")
+            return
+
+        age_s = time.monotonic() - self._last_snapshot_received_at
+        yellow = sum(robot is not None for robot in snapshot.yellow)
+        blue = sum(robot is not None for robot in snapshot.blue)
+        ball = "yes" if snapshot.ball is not None else "no"
+        if age_s > 0.5:
+            self.connection_status.setText(
+                f"FAIL · grSim vision stale ({age_s:.2f}s old) · "
+                f"yellow={yellow} · blue={blue} · ball={ball}"
+            )
+            return
+
+        self.connection_status.setText(
+            f"PASS · live grSim vision ({age_s * 1000.0:.0f}ms old) · "
+            f"frame={snapshot.frame_number} · yellow={yellow} · "
+            f"blue={blue} · ball={ball}"
+        )
 
     def _motion_test(self) -> None:
         if self.controller.state not in (
@@ -925,7 +943,7 @@ class ExecutionConsolePage(QWidget):
         answer = QMessageBox.warning(
             self,
             "Motion feedback test",
-            "Rotate yellow robot 0 at 3 rad/s for one second? The robot will move.",
+            "Rotate yellow robot 0 at 0.5 rad/s for five seconds? The robot will move.",
             QMessageBox.Yes | QMessageBox.Cancel,
         )
         if answer != QMessageBox.Yes:
@@ -938,15 +956,40 @@ class ExecutionConsolePage(QWidget):
         self._motion_test_start_theta = robot.orientation_rad
         self._motion_test_started_at = time.monotonic()
         self._motion_test_samples = 0
+        if not self._send_motion_test_command():
+            return
+        self.motion_command_timer.start()
+        self.motion_stop_timer.start(5000)
+        self.connection_status.setText(
+            "Motion command streaming at 20 Hz; awaiting feedback…"
+        )
+
+    def _send_motion_test_command(self) -> bool:
+        key = self._motion_test_key
+        if key is None:
+            self.motion_command_timer.stop()
+            return False
+        is_yellow, robot_id = key
         try:
-            self.runtime.send_robot_command(RobotCommand(0, w=3.0, isYellow=True))
-            self.motion_stop_timer.start(1000)
-            self.connection_status.setText("Motion command sent; awaiting feedback…")
+            self.runtime.send_robot_command(
+                RobotCommand(robot_id, w=0.5, isYellow=is_yellow)
+            )
+            return True
         except Exception as exc:
-            self.runtime.stop_robot(True, 0)
-            self.connection_status.setText(f"Motion test failed: {exc}; stop attempted")
+            self.motion_command_timer.stop()
+            self.motion_stop_timer.stop()
+            try:
+                self.runtime.stop_robot(is_yellow, robot_id)
+            except Exception:
+                pass
+            self._motion_test_key = None
+            self.connection_status.setText(
+                f"Motion command stream failed: {exc}; stop attempted"
+            )
+            return False
 
     def _finish_motion_test(self) -> None:
+        self.motion_command_timer.stop()
         key = self._motion_test_key
         try:
             if key is not None:
@@ -968,7 +1011,7 @@ class ExecutionConsolePage(QWidget):
                 measured = delta / elapsed
                 passed = self._motion_test_samples > 0 and delta >= 0.25
                 self.connection_status.setText(
-                    f"{'PASS' if passed else 'FAIL'} · command 3.000 rad/s · "
+                    f"{'PASS' if passed else 'FAIL'} · command 0.500 rad/s · "
                     f"measured {measured:.3f} rad/s · {self._motion_test_samples} samples · "
                     f"stop command sent"
                 )
@@ -1110,6 +1153,7 @@ class ExecutionConsolePage(QWidget):
 
     def shutdown(self) -> None:
         self.watchdog_timer.stop()
+        self.motion_command_timer.stop()
         self.motion_stop_timer.stop()
         if self._motion_test_key is not None:
             try:
