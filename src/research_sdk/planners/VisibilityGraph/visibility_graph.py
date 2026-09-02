@@ -267,11 +267,28 @@ def plan(
     polygon_centres: list[Point] = []
     polygon_bounding_radii: list[float] = []
     for obs in request.obstacles:
-        inflate_radius = obs.radius_mm + (total_clearance - request.robot_radius_mm)
+        # total_clearance is robot_radius_mm + clearance_mm (see
+        # PlanRequest.total_clearance_mm) -- the Minkowski-sum radius is the
+        # obstacle's own physical radius plus that, so both bodies (and the
+        # safety margin) stay clear of each other. Previously this
+        # subtracted robot_radius_mm back out, which cancelled it entirely
+        # and left obstacles inflated by only their own radius + clearance,
+        # ignoring the planning robot's own footprint -- matching neither
+        # the UI's rendered obstacle boundary (`app.py`'s
+        # `_draw_planner_obstacle`) nor `_safety_clearance_radius` in
+        # `waypoint_manager.py`, and letting paths cut through obstacles.
+        inflate_radius = obs.radius_mm + total_clearance
         centre = (float(obs.pos_mm[0]), float(obs.pos_mm[1]))
         polygons.append(_inflate_circle_to_polygon(centre, inflate_radius, polygon_sides))
         polygon_centres.append(centre)
-        polygon_bounding_radii.append(inflate_radius)
+        # Broad-phase bounding radius must cover the polygon's actual extent,
+        # i.e. the *circumscribed* vertex radius -- not the apothem
+        # (`inflate_radius`) the polygon was built from. Using the smaller
+        # apothem here let segments that pass between the apothem and the
+        # true vertex radius skip the real intersection test entirely,
+        # falsely reporting clear line-of-sight through the obstacle.
+        vertex_radius = inflate_radius / math.cos(math.pi / polygon_sides)
+        polygon_bounding_radii.append(vertex_radius)
 
     if record is not None:
         record.log(

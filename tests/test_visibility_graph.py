@@ -38,7 +38,7 @@ def test_routes_around_single_obstacle():
     assert len(result.waypoints_mm) >= 3, "should detour via at least one polygon vertex"
 
     total_clearance = request.total_clearance_mm
-    inflated_radius = obstacle.radius_mm + (total_clearance - request.robot_radius_mm)
+    inflated_radius = obstacle.radius_mm + total_clearance
     for (x0, y0), (x1, y1) in zip(result.waypoints_mm, result.waypoints_mm[1:]):
         for t in [i / 20 for i in range(21)]:
             px = x0 + (x1 - x0) * t
@@ -98,6 +98,34 @@ def test_start_inside_obstacle_fails_cleanly():
     result = plan(request)
     assert not result.success
     assert "inflated obstacle" in result.message
+
+
+def test_direct_path_grazing_polygon_vertex_region_is_rejected():
+    """Regression test for a broad-phase bug: the visibility check's
+    bounding-circle rejection used the polygon's apothem (inradius) instead
+    of its true circumradius (vertex radius). A straight line whose closest
+    approach to the obstacle centre falls between those two values can still
+    cross the polygon near a vertex, but was wrongly skipped by the broad
+    phase and reported as clear -- letting the direct-path shortcut return a
+    path straight through the obstacle."""
+    obstacle = Obstacle(pos_mm=(0.0, 0.0), radius_mm=100.0, robot_id=1)
+    request = PlanRequest(
+        start_mm=(140.0, -2000.0),
+        goal_mm=(140.0, 2000.0),
+        obstacles=(obstacle,),
+    )
+    result = plan(request, polygon_sides=6)
+    assert result.success
+    assert "direct" not in result.message, "direct line crosses the obstacle and must not be taken"
+
+    total_clearance = request.total_clearance_mm
+    inflated_radius = obstacle.radius_mm + total_clearance
+    for (x0, y0), (x1, y1) in zip(result.waypoints_mm, result.waypoints_mm[1:]):
+        for t in [i / 20 for i in range(21)]:
+            px = x0 + (x1 - x0) * t
+            py = y0 + (y1 - y0) * t
+            dist = ((px - obstacle.pos_mm[0]) ** 2 + (py - obstacle.pos_mm[1]) ** 2) ** 0.5
+            assert dist >= inflated_radius - 1e-6, "path enters inflated obstacle"
 
 
 def test_polygon_boundary_vertices_stay_connected():
