@@ -266,6 +266,7 @@ def plan(
     polygons: list[list[Point]] = []
     polygon_centres: list[Point] = []
     polygon_bounding_radii: list[float] = []
+    polygon_clearance_radii: list[float] = []
     for obs in request.obstacles:
         # total_clearance is robot_radius_mm + clearance_mm (see
         # PlanRequest.total_clearance_mm) -- the Minkowski-sum radius is the
@@ -281,6 +282,7 @@ def plan(
         centre = (float(obs.pos_mm[0]), float(obs.pos_mm[1]))
         polygons.append(_inflate_circle_to_polygon(centre, inflate_radius, polygon_sides))
         polygon_centres.append(centre)
+        polygon_clearance_radii.append(inflate_radius)
         # Broad-phase bounding radius must cover the polygon's actual extent,
         # i.e. the *circumscribed* vertex radius -- not the apothem
         # (`inflate_radius`) the polygon was built from. Using the smaller
@@ -300,8 +302,17 @@ def plan(
             field_width_mm=request.field_width_mm,
         )
 
-    for polygon in polygons:
-        if _point_in_polygon(start, polygon) or _point_in_polygon(goal, polygon):
+    # Checked against the true clearance circle (centre + inflate_radius),
+    # not the circumscribed polygon: the polygon is deliberately larger than
+    # the safety circle (so the segment-collision test never cuts inside it
+    # near a vertex), but that means a point in the gap between the circle
+    # and a polygon vertex is genuinely clear even though it's inside the
+    # polygon -- using point-in-polygon here false-rejected valid start/goal
+    # points in that gap.
+    for centre, clearance_radius in zip(polygon_centres, polygon_clearance_radii):
+        dist_start = math.hypot(start[0] - centre[0], start[1] - centre[1])
+        dist_goal = math.hypot(goal[0] - centre[0], goal[1] - centre[1])
+        if dist_start <= clearance_radius or dist_goal <= clearance_radius:
             return PlanResult(
                 success=False,
                 waypoints_mm=(),
