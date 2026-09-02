@@ -15,23 +15,27 @@ from math import atan2, cos, hypot, sin
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QButtonGroup,
     QComboBox,
     QFileDialog,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
+    QRadioButton,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -72,9 +76,13 @@ from research_sdk.world.snapshot import WorldSnapshot
 class ExecutionFieldCanvas(QWidget):
     """Live grSim field with execution progress and safety indicators."""
 
+    resized = Signal()
+
     def __init__(self) -> None:
         super().__init__()
-        self.setMinimumSize(720, 480)
+        # Leave vertical room for the collapsible console. The map is the
+        # flexible region and intentionally shrinks when the console opens.
+        self.setMinimumSize(600, 300)
         self.scenario: Scenario | None = None
         self.robots: dict[tuple[bool, int], LiveRobot] = {}
         self.last_seen: dict[tuple[bool, int], float] = {}
@@ -157,6 +165,10 @@ class ExecutionFieldCanvas(QWidget):
             painter.drawRoundedRect(badge, 8, 8)
             painter.drawText(badge, Qt.AlignCenter, self.state.value)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.resized.emit()
+
     def _draw_scenario(self, painter: QPainter) -> None:
         """Draw the loaded experiment before live execution begins."""
         if self.scenario is None:
@@ -222,17 +234,23 @@ class ExecutionFieldCanvas(QWidget):
         for path in self.paths:
             if len(path.points_mm) < 2:
                 continue
+            # A previous robot's waypoint marker leaves a yellow brush active.
+            # Paths can form closed regions, so reset the brush per robot to
+            # prevent Qt from filling those regions yellow.
+            painter.setBrush(Qt.NoBrush)
             key = (path.is_yellow, path.robot_id)
             index = self.waypoint_indices.get(key, 1)
             completed = path.points_mm[: max(1, index)]
             remaining = path.points_mm[max(0, index - 1) :]
             if len(completed) >= 2:
+                painter.setBrush(Qt.NoBrush)
                 drawing = QPainterPath(self._to_screen(completed[0]))
                 for point in completed[1:]:
                     drawing.lineTo(self._to_screen(point))
                 painter.setPen(QPen(QColor("#66bb6a"), 4))
                 painter.drawPath(drawing)
             if len(remaining) >= 2:
+                painter.setBrush(Qt.NoBrush)
                 drawing = QPainterPath(self._to_screen(remaining[0]))
                 for point in remaining[1:]:
                     drawing.lineTo(self._to_screen(point))
@@ -302,7 +320,7 @@ class ExecutionConsolePage(QWidget):
         self.last_apply_report: ApplyReport | None = None
         self.canvas = ExecutionFieldCanvas()
         self.planners = discover_planners()
-        self.planner_rows: dict[str, tuple[QCheckBox, QLabel, QPushButton, QWidget]] = {}
+        self.planner_rows: dict[str, tuple[QRadioButton, QLabel, QWidget]] = {}
         self.planner_failures: dict[str, str] = {}
         self.current_metrics: dict[str, RunMetrics] = {}
         self.metric_templates: dict[str, RunMetrics] = {}
@@ -318,14 +336,13 @@ class ExecutionConsolePage(QWidget):
         self.source_checkpoint_id: str | None = None
         self.run_started_at: float | None = None
         self._stepping = False
-        self._pending_replay_owner: str | None = None
-        self._pending_replay_shadows: set[str] = set()
         self._pending_checkpoint: CheckpointRecord | None = None
         self._motion_test_key: tuple[bool, int] | None = None
         self._motion_test_start_theta: float | None = None
         self._motion_test_started_at: float | None = None
         self._motion_test_samples = 0
         self._last_snapshot_received_at: float | None = None
+        self._toast_animation: QPropertyAnimation | None = None
         self.execution_timer = QTimer(self)
         self.execution_timer.setInterval(50)
         self.execution_timer.timeout.connect(self._execution_tick)
@@ -348,28 +365,25 @@ class ExecutionConsolePage(QWidget):
         top = QGridLayout()
         self.vision_test_button = QPushButton("Vision health test")
         self.motion_test_button = QPushButton("Motion feedback test")
-        self.connection_status = QLabel("Vision not tested")
         top.addWidget(self.vision_test_button, 0, 0)
         top.addWidget(self.motion_test_button, 1, 0)
-        top.addWidget(self.connection_status, 2, 0)
 
         self.state_badge = QLabel()
         self.state_badge.setAlignment(Qt.AlignCenter)
         self.state_badge.setStyleSheet("font-size: 16px; font-weight: 800; padding: 8px;")
         transport = QHBoxLayout()
+        self.run_button = QPushButton("Run")
         self.pause_button = QPushButton("Pause")
-        self.continue_button = QPushButton("Continue")
+        self.previous_step_button = QPushButton("Previous step")
         self.step_button = QPushButton("Step")
-        self.replay_button = QPushButton("Replay from start")
         self.checkpoint_selector = QComboBox()
-        self.resume_checkpoint_button = QPushButton("Resume checkpoint")
-        self.reset_button = QPushButton("Reset E-Stop")
+        self.resume_checkpoint_button = QPushButton("Restart checkpoint")
+        self.reset_button = QPushButton("Reset")
         for button in (
+            self.run_button,
             self.pause_button,
-            self.continue_button,
+            self.previous_step_button,
             self.step_button,
-            self.replay_button,
-            self.resume_checkpoint_button,
             self.reset_button,
         ):
             transport.addWidget(button)
@@ -377,56 +391,64 @@ class ExecutionConsolePage(QWidget):
         transport_widget.setLayout(transport)
         top.addWidget(self.state_badge, 0, 1)
         top.addWidget(transport_widget, 1, 1)
-        top.addWidget(self.checkpoint_selector, 2, 1)
+        checkpoint_row = QHBoxLayout()
+        self.checkpoint_label = QLabel("Last checkpoint")
+        checkpoint_row.addWidget(self.checkpoint_label)
+        checkpoint_row.addWidget(self.checkpoint_selector, 1)
+        checkpoint_row.addWidget(self.resume_checkpoint_button)
+        self.emergency_button = QPushButton("EMERGENCY STOP")
+        self.emergency_button.setStyleSheet(
+            "background:#b71c1c;color:white;font-weight:800;font-size:12px;padding:4px 10px;"
+        )
+        checkpoint_row.addWidget(self.emergency_button)
+        checkpoint_widget = QWidget()
+        checkpoint_widget.setLayout(checkpoint_row)
+        top.addWidget(checkpoint_widget, 2, 1)
 
         self.scenario_selector = QComboBox()
         self.refresh_button = QPushButton("Refresh")
         self.add_scenario_button = QPushButton("Add Scenario")
         self.load_button = QPushButton("Load Scenario")
+        self.unload_button = QPushButton("Unload Scenario")
         self.apply_button = QPushButton("Load scenario into grSim")
         scenario_controls = QGridLayout()
         scenario_controls.addWidget(self.scenario_selector, 0, 0)
         scenario_controls.addWidget(self.refresh_button, 0, 1)
         scenario_controls.addWidget(self.add_scenario_button, 1, 0)
         scenario_controls.addWidget(self.load_button, 1, 1)
-        scenario_controls.addWidget(self.apply_button, 2, 0, 1, 2)
-        self.apply_status = QLabel("No scenario applied")
-        self.apply_status.setWordWrap(True)
-        scenario_controls.addWidget(self.apply_status, 3, 0, 1, 2)
+        scenario_controls.addWidget(self.unload_button, 2, 0, 1, 2)
+        scenario_controls.addWidget(self.apply_button, 3, 0, 1, 2)
         scenario_widget = QWidget()
         scenario_widget.setLayout(scenario_controls)
         top.addWidget(scenario_widget, 0, 2, 3, 1)
         top.setColumnStretch(1, 1)
         root.addLayout(top)
 
-        self.emergency_button = QPushButton("EMERGENCY STOP")
-        self.emergency_button.setStyleSheet(
-            "background:#b71c1c;color:white;font-weight:900;font-size:16px;padding:9px;"
-        )
-        root.addWidget(self.emergency_button)
-
         right = QWidget()
         right_layout = QVBoxLayout(right)
         planner_group = QGroupBox("Planners")
         planner_layout = QVBoxLayout(planner_group)
+        self.planner_group = QButtonGroup(self)
+        self.planner_group.setExclusive(True)
         for label, planner_cls in self.planners.items():
             del planner_cls
             row_widget = QWidget()
             row = QHBoxLayout(row_widget)
-            checkbox = QCheckBox()
+            radio = QRadioButton()
             name = QLabel(label)
             role = QLabel("INACTIVE")
-            run = QPushButton("Run")
-            row.addWidget(checkbox)
+            row.addWidget(radio)
             row.addWidget(name, 1)
             row.addWidget(role)
-            row.addWidget(run)
-            checkbox.toggled.connect(
-                lambda checked, planner=label: self._shadow_changed(planner, checked)
-            )
-            run.clicked.connect(lambda checked=False, planner=label: self._run(planner))
+            self.planner_group.addButton(radio)
+            radio.toggled.connect(lambda _checked: self._refresh_ui())
             planner_layout.addWidget(row_widget)
-            self.planner_rows[label] = (checkbox, role, run, row_widget)
+            self.planner_rows[label] = (radio, role, row_widget)
+        if self.planner_rows:
+            first_radio = next(iter(self.planner_rows.values()))[0]
+            first_radio.blockSignals(True)
+            first_radio.setChecked(True)
+            first_radio.blockSignals(False)
         right_layout.addWidget(planner_group)
 
         self.results_tabs = QTabWidget()
@@ -442,35 +464,101 @@ class ExecutionConsolePage(QWidget):
         export_row.addWidget(self.export_b_button)
         right_layout.addLayout(export_row)
 
+        map_panel = QWidget()
+        map_layout = QVBoxLayout(map_panel)
+        map_layout.setContentsMargins(0, 0, 0, 0)
+        map_layout.setSpacing(4)
+        map_layout.addWidget(self.canvas, 1)
+
+        self.debug_toggle = QToolButton()
+        self.debug_toggle.setText("Debug console")
+        self.debug_toggle.setCheckable(True)
+        self.debug_toggle.setChecked(False)
+        self.debug_toggle.setArrowType(Qt.RightArrow)
+        self.debug_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.debug_console = QPlainTextEdit()
+        self.debug_console.setReadOnly(True)
+        self.debug_console.setMaximumBlockCount(500)
+        self.debug_console.setFixedHeight(96)
+        self.debug_console.setStyleSheet(
+            "background:#0b1117;color:#cfd8dc;font-family:monospace;"
+            "border:1px solid #263238;"
+        )
+        self.debug_console.hide()
+        map_layout.addWidget(self.debug_toggle)
+        map_layout.addWidget(self.debug_console)
+
+        self.error_toast = QLabel(self.canvas)
+        self.error_toast.setWordWrap(True)
+        self.error_toast.setMaximumWidth(320)
+        self.error_toast.setStyleSheet(
+            "background:#b71c1c;color:white;border-radius:6px;padding:8px;font-weight:700;"
+        )
+        self.error_toast.hide()
+        self._toast_opacity = QGraphicsOpacityEffect(self.error_toast)
+        self.error_toast.setGraphicsEffect(self._toast_opacity)
+        self.canvas.resized.connect(self._position_error_toast)
+
         splitter = QSplitter()
-        splitter.addWidget(self.canvas)
+        splitter.addWidget(map_panel)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
         splitter.setSizes((900, 420))
         root.addWidget(splitter, 1)
 
         self.summary = QLabel("run -- | elapsed -- ms | plans 0 | collisions 0")
-        self.error_label = QLabel()
-        self.error_label.setStyleSheet("color:#ef5350;font-weight:700;")
-        self.error_label.setWordWrap(True)
         root.addWidget(self.summary)
-        root.addWidget(self.error_label)
 
         self.vision_test_button.clicked.connect(self._vision_test)
         self.motion_test_button.clicked.connect(self._motion_test)
         self.refresh_button.clicked.connect(self.refresh_scenarios)
         self.add_scenario_button.clicked.connect(self.navigate_to_planner.emit)
         self.load_button.clicked.connect(self._load_scenario)
+        self.unload_button.clicked.connect(self._unload_scenario)
         self.apply_button.clicked.connect(self._apply_scenario)
         self.pause_button.clicked.connect(self._pause)
-        self.continue_button.clicked.connect(self._continue)
+        self.previous_step_button.clicked.connect(self._previous_step)
         self.step_button.clicked.connect(self._step)
-        self.replay_button.clicked.connect(self._replay_from_start)
+        self.run_button.clicked.connect(lambda checked=False: self._run_or_continue())
         self.resume_checkpoint_button.clicked.connect(self._resume_checkpoint)
         self.reset_button.clicked.connect(self._reset)
         self.emergency_button.clicked.connect(lambda: self.emergency_stop())
         self.export_a_button.clicked.connect(lambda: self._export_table("a"))
         self.export_b_button.clicked.connect(lambda: self._export_table("b"))
+        self.debug_toggle.toggled.connect(self._toggle_debug_console)
+        self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
+
+    def _toggle_debug_console(self, expanded: bool) -> None:
+        self.debug_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.debug_console.setVisible(expanded)
+
+    def _log_debug(self, message: str, *, level: str = "INFO") -> None:
+        stamp = datetime.now().astimezone().strftime("%H:%M:%S.%f")[:-3]
+        self.debug_console.appendPlainText(f"{stamp} [{level}] {message}")
+
+    def _show_error_toast(self, message: str) -> None:
+        self.error_toast.setText(message)
+        self.error_toast.adjustSize()
+        self._position_error_toast()
+        self._toast_opacity.setOpacity(0.5)
+        self.error_toast.show()
+        self.error_toast.raise_()
+        animation = QPropertyAnimation(self._toast_opacity, b"opacity", self)
+        animation.setDuration(500)
+        animation.setStartValue(0.5)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.OutCubic)
+        animation.finished.connect(self.error_toast.hide)
+        self._toast_animation = animation
+        animation.start()
+
+    def _position_error_toast(self) -> None:
+        if not hasattr(self, "error_toast"):
+            return
+        self.error_toast.move(
+            max(8, self.canvas.width() - self.error_toast.width() - 12),
+            12,
+        )
 
     @staticmethod
     def _create_table() -> QTableWidget:
@@ -484,12 +572,14 @@ class ExecutionConsolePage(QWidget):
     def refresh_scenarios(self) -> None:
         selected = self.scenario_selector.currentData()
         self.scenario_selector.clear()
-        for path in self.store.list_paths():
+        paths = self.store.list_paths()
+        for path in paths:
             self.scenario_selector.addItem(path.stem, str(path))
         if selected:
             index = self.scenario_selector.findData(selected)
             if index >= 0:
                 self.scenario_selector.setCurrentIndex(index)
+        self._log_debug(f"[SCENARIO] refreshed scenario list: {len(paths)} available")
 
     def _load_scenario(self) -> None:
         path_text = self.scenario_selector.currentData()
@@ -533,10 +623,26 @@ class ExecutionConsolePage(QWidget):
                 ExecutionInput.create(scenario, paths_by_planner, planner_classes)
             )
             self.canvas.set_scenario(scenario)
-            self.apply_status.setText(f"Loaded {scenario.name}; apply it to grSim")
+            self._log_debug(f"[SCENARIO] loaded to view: {scenario.name}")
             self._refresh_ui()
         except Exception as exc:
             QMessageBox.critical(self, "Cannot load execution scenario", str(exc))
+
+    def _unload_scenario(self) -> None:
+        try:
+            self.controller.unload()
+            self.verifier = None
+            self.last_apply_report = None
+            self.planner_failures.clear()
+            self.canvas.set_scenario(None)
+            self.canvas.paths = ()
+            self.canvas.waypoint_indices.clear()
+            self._log_debug("[SCENARIO] unloaded")
+            self._refresh_ui()
+        except Exception as exc:
+            message = f"Cannot unload scenario: {exc}"
+            self._log_debug(message, level="ERROR")
+            self._show_error_toast(message)
 
     def _apply_scenario(self) -> None:
         execution_input = self.controller.execution_input
@@ -546,7 +652,7 @@ class ExecutionConsolePage(QWidget):
             self.controller.begin_apply()
             self.verifier = ScenarioApplyVerifier(execution_input.scenario)
             self.runtime.apply_scenario(execution_input.scenario, include_obstacles=True)
-            self.apply_status.setText("Replacement sent; waiting for 3 stable snapshots…")
+            self._log_debug("[APPLY] replacement sent; waiting for 3 stable snapshots")
             self._refresh_ui()
         except Exception as exc:
             self._fail(f"Scenario application failed: {exc}")
@@ -562,22 +668,15 @@ class ExecutionConsolePage(QWidget):
                 return
             report = self.verifier.observe(snapshot, now=snapshot.timestamp)
             self.last_apply_report = report
-            self._show_apply_report(report)
             if report.ready:
+                self._log_debug(f"[APPLY] {self._format_apply_report(report)}")
                 self.controller.confirm_apply()
                 self.verifier = None
                 if self._pending_checkpoint is not None:
                     self._finish_checkpoint_restore()
-                elif self._pending_replay_owner is not None:
-                    owner = self._pending_replay_owner
-                    shadows = set(self._pending_replay_shadows)
-                    self._pending_replay_owner = None
-                    self._pending_replay_shadows.clear()
-                    for planner in shadows:
-                        self.controller.set_shadow(planner, True)
-                    self._run(owner)
                 self._refresh_ui()
             elif self.verifier.timed_out:
+                self._log_debug(f"[APPLY] {self._format_apply_report(report)}", level="ERROR")
                 self._fail("Scenario apply confirmation timed out")
 
     def _watchdog_tick(self) -> None:
@@ -594,7 +693,8 @@ class ExecutionConsolePage(QWidget):
         ):
             self._fail("Fatal vision error: live world snapshot is stale; robots stopped")
 
-    def _show_apply_report(self, report: ApplyReport) -> None:
+    @staticmethod
+    def _format_apply_report(report: ApplyReport) -> str:
         position = (
             "--" if report.maximum_position_error_mm is None else f"{report.maximum_position_error_mm:.1f} mm"
         )
@@ -603,25 +703,21 @@ class ExecutionConsolePage(QWidget):
             if report.maximum_orientation_error_rad is None
             else f"{report.maximum_orientation_error_rad:.3f} rad"
         )
-        self.apply_status.setText(
-            f"Applied: {report.confirmed}/{report.expected} robots confirmed\n"
-            f"Maximum position error: {position}\n"
-            f"Maximum orientation error: {orientation}\n"
-            f"Vision age: {report.vision_age_ms or 0.0:.1f} ms\n"
-            f"Stable snapshots: {report.stable_snapshots}/3"
-            + (f"\nMismatches: {', '.join(report.mismatches)}" if report.mismatches else "")
+        summary = (
+            f"{report.confirmed}/{report.expected} robots confirmed, "
+            f"max position error {position}, max orientation error {orientation}, "
+            f"vision age {report.vision_age_ms or 0.0:.1f} ms, "
+            f"stable snapshots {report.stable_snapshots}/3"
         )
+        if report.mismatches:
+            summary += f", mismatches: {', '.join(report.mismatches)}"
+        return summary
 
-    def _shadow_changed(self, planner: str, checked: bool) -> None:
-        try:
-            self.controller.set_shadow(planner, checked)
-        except Exception as exc:
-            checkbox = self.planner_rows[planner][0]
-            checkbox.blockSignals(True)
-            checkbox.setChecked(planner in self.controller.shadow_planners)
-            checkbox.blockSignals(False)
-            self.error_label.setText(str(exc))
-        self._refresh_ui()
+    def _selected_planner(self) -> str:
+        for planner, (radio, _role, _widget) in self.planner_rows.items():
+            if radio.isChecked():
+                return planner
+        return ""
 
     def _run(self, planner: str) -> None:
         try:
@@ -650,9 +746,19 @@ class ExecutionConsolePage(QWidget):
             for metrics in self.current_metrics.values():
                 metrics.start_execution()
             self.execution_timer.start()
+            self._log_debug(
+                f"Run {self.run_id} started with {planner}; "
+                f"{len(paths)} robot command stream(s) active"
+            )
             self._refresh_ui()
         except Exception as exc:
             self._fail(f"Cannot run planner: {exc}")
+
+    def _run_or_continue(self) -> None:
+        if self.controller.state is ExecutionState.PAUSED:
+            self._continue()
+        else:
+            self._run(self._selected_planner())
 
     def _pause(self) -> None:
         try:
@@ -671,6 +777,15 @@ class ExecutionConsolePage(QWidget):
             self._refresh_ui()
         except Exception as exc:
             self._fail(f"Continue failed: {exc}")
+
+    def _previous_step(self) -> None:
+        index = self.checkpoint_selector.currentIndex()
+        if index > 0:
+            self.checkpoint_selector.setCurrentIndex(index - 1)
+            self._log_debug(
+                f"[CHECKPOINT] selected previous checkpoint: "
+                f"{self.checkpoint_selector.currentText()}"
+            )
 
     def _step(self) -> None:
         try:
@@ -723,9 +838,20 @@ class ExecutionConsolePage(QWidget):
         checkpoint = self._make_checkpoint(snapshot, new)
         self.checkpoint_store.append(checkpoint)
         self.checkpoints.append(checkpoint)
+        elapsed_ms = float(checkpoint.metrics["elapsed_ms"])
         self.checkpoint_selector.addItem(
-            f"{checkpoint.checkpoint_id} · {checkpoint.triggers[0]['robot_key']}",
+            f"{elapsed_ms:.0f} ms · {checkpoint.checkpoint_id} · "
+            f"{checkpoint.triggers[0]['robot_key']}",
             checkpoint.checkpoint_id,
+        )
+        self.checkpoint_selector.setCurrentIndex(self.checkpoint_selector.count() - 1)
+        trigger_text = ", ".join(
+            f"{item['robot_key']} waypoint {item['reached_waypoint_index']}"
+            for item in checkpoint.triggers
+        )
+        self._log_debug(
+            f"[CHECKPOINT] {elapsed_ms:.1f} ms since run: {trigger_text}; "
+            f"checkpoint saved as {checkpoint.checkpoint_id}"
         )
 
     def _make_checkpoint(
@@ -790,28 +916,16 @@ class ExecutionConsolePage(QWidget):
             return
         try:
             self.emergency_stop(finalize=True)
+            self.checkpoints.clear()
+            self.checkpoint_selector.clear()
+            self.recorded_boundaries.clear()
+            self._log_debug("[CHECKPOINT] checkpoint list cleared by reset")
             self.controller.begin_reset()
             self.verifier = ScenarioApplyVerifier(execution_input.scenario)
             self.runtime.apply_scenario(execution_input.scenario, include_obstacles=True)
             self._refresh_ui()
         except Exception as exc:
             self._fail(f"Reset failed: {exc}")
-
-    def _replay_from_start(self) -> None:
-        try:
-            owner = self.controller.request_start_replay()
-            shadows = set(self.controller.shadow_planners)
-            execution_input = self.controller.execution_input
-            assert execution_input is not None
-            self.emergency_stop(finalize=True)
-            self.controller.begin_reset()
-            self._pending_replay_owner = owner
-            self._pending_replay_shadows = shadows
-            self.verifier = ScenarioApplyVerifier(execution_input.scenario)
-            self.runtime.apply_scenario(execution_input.scenario, include_obstacles=True)
-            self._refresh_ui()
-        except Exception as exc:
-            self._fail(f"Replay failed: {exc}")
 
     def _resume_checkpoint(self) -> None:
         checkpoint_id = self.checkpoint_selector.currentData()
@@ -920,7 +1034,10 @@ class ExecutionConsolePage(QWidget):
         self.controller.stop(error=message)
         if finalize:
             self._finalize_run(completed=False)
-        self.error_label.setText(message or "Execution stopped")
+        log_message = message or "Execution stopped"
+        self._log_debug(log_message, level="ERROR" if message else "INFO")
+        if message:
+            self._show_error_toast(message)
         self._refresh_ui()
 
     def _fail(self, message: str) -> None:
@@ -964,8 +1081,8 @@ class ExecutionConsolePage(QWidget):
     def _vision_test(self) -> None:
         snapshot = self.runtime.world_snapshot
         if snapshot is None or self._last_snapshot_received_at is None:
-            self.connection_status.setText(
-                "FAIL · no complete grSim vision snapshot received"
+            self._log_debug(
+                "[VISION] FAIL · no complete grSim vision snapshot received", level="ERROR"
             )
             return
 
@@ -974,14 +1091,15 @@ class ExecutionConsolePage(QWidget):
         blue = sum(robot is not None for robot in snapshot.blue)
         ball = "yes" if snapshot.ball is not None else "no"
         if age_s > 0.5:
-            self.connection_status.setText(
-                f"FAIL · grSim vision stale ({age_s:.2f}s old) · "
-                f"yellow={yellow} · blue={blue} · ball={ball}"
+            self._log_debug(
+                f"[VISION] FAIL · grSim vision stale ({age_s:.2f}s old) · "
+                f"yellow={yellow} · blue={blue} · ball={ball}",
+                level="ERROR",
             )
             return
 
-        self.connection_status.setText(
-            f"PASS · live grSim vision ({age_s * 1000.0:.0f}ms old) · "
+        self._log_debug(
+            f"[VISION] PASS · live grSim vision ({age_s * 1000.0:.0f}ms old) · "
             f"frame={snapshot.frame_number} · yellow={yellow} · "
             f"blue={blue} · ball={ball}"
         )
@@ -1013,9 +1131,7 @@ class ExecutionConsolePage(QWidget):
             return
         self.motion_command_timer.start()
         self.motion_stop_timer.start(5000)
-        self.connection_status.setText(
-            "Motion command streaming at 20 Hz; awaiting feedback…"
-        )
+        self._log_debug("[MOTION] command streaming at 20 Hz; awaiting feedback")
 
     def _send_motion_test_command(self) -> bool:
         key = self._motion_test_key
@@ -1036,8 +1152,8 @@ class ExecutionConsolePage(QWidget):
             except Exception:
                 pass
             self._motion_test_key = None
-            self.connection_status.setText(
-                f"Motion command stream failed: {exc}; stop attempted"
+            self._log_debug(
+                f"[MOTION] command stream failed: {exc}; stop attempted", level="ERROR"
             )
             return False
 
@@ -1049,7 +1165,9 @@ class ExecutionConsolePage(QWidget):
                 self.runtime.stop_robot(*key)
             robot = self.runtime.live_robots.get(key) if key is not None else None
             if robot is None or self._motion_test_start_theta is None:
-                self.connection_status.setText("Motion feedback missing; stop command sent")
+                self._log_debug(
+                    "[MOTION] feedback missing; stop command sent", level="ERROR"
+                )
             else:
                 delta = abs(
                     atan2(
@@ -1063,13 +1181,14 @@ class ExecutionConsolePage(QWidget):
                 )
                 measured = delta / elapsed
                 passed = self._motion_test_samples > 0 and delta >= 0.25
-                self.connection_status.setText(
-                    f"{'PASS' if passed else 'FAIL'} · command 0.500 rad/s · "
+                self._log_debug(
+                    f"[MOTION] {'PASS' if passed else 'FAIL'} · command 0.500 rad/s · "
                     f"measured {measured:.3f} rad/s · {self._motion_test_samples} samples · "
-                    f"stop command sent"
+                    f"stop command sent",
+                    level="INFO" if passed else "ERROR",
                 )
         except Exception as exc:
-            self.connection_status.setText(f"Motion stop failed: {exc}")
+            self._log_debug(f"[MOTION] stop failed: {exc}", level="ERROR")
         finally:
             self._motion_test_key = None
             self._motion_test_start_theta = None
@@ -1115,12 +1234,34 @@ class ExecutionConsolePage(QWidget):
         self.refresh_button.setEnabled(loadable)
         self.load_button.setEnabled(loadable)
         self.apply_button.setEnabled(state is ExecutionState.SCENARIO_LOADED)
+        self.unload_button.setEnabled(
+            state
+            in (
+                ExecutionState.SCENARIO_LOADED,
+                ExecutionState.READY,
+                ExecutionState.COMPLETED,
+                ExecutionState.STOPPED,
+                ExecutionState.ERROR,
+            )
+        )
         self.pause_button.setEnabled(state is ExecutionState.RUNNING)
-        self.continue_button.setEnabled(state is ExecutionState.PAUSED and not self._stepping)
-        self.step_button.setEnabled(state is ExecutionState.PAUSED and not self._stepping)
-        self.replay_button.setEnabled(
-            state in (ExecutionState.COMPLETED, ExecutionState.STOPPED, ExecutionState.ERROR)
-            and self.controller.velocity_owner is not None
+        is_paused = state is ExecutionState.PAUSED
+        self.step_button.setEnabled(is_paused and not self._stepping)
+        self.previous_step_button.setEnabled(self.checkpoint_selector.currentIndex() > 0)
+        selected_planner = self._selected_planner()
+        selected_paths = (
+            ()
+            if self.controller.execution_input is None
+            else self.controller.execution_input.paths_by_planner.get(selected_planner, ())
+        )
+        self.run_button.setText("Continue" if is_paused else "Run")
+        self.run_button.setEnabled(
+            (
+                state is ExecutionState.READY
+                and not self.controller.selections_locked
+                and bool(selected_paths)
+            )
+            or (is_paused and not self._stepping)
         )
         self.resume_checkpoint_button.setEnabled(
             bool(self.checkpoints)
@@ -1132,19 +1273,23 @@ class ExecutionConsolePage(QWidget):
                 ExecutionState.ERROR,
             )
         )
-        self.reset_button.setEnabled(state is not ExecutionState.NO_SCENARIO)
+        self.reset_button.setEnabled(
+            state
+            in (
+                ExecutionState.READY,
+                ExecutionState.RUNNING,
+                ExecutionState.PAUSED,
+                ExecutionState.COMPLETED,
+                ExecutionState.STOPPED,
+                ExecutionState.ERROR,
+            )
+        )
         self.motion_test_button.setEnabled(loadable)
-        for planner, (checkbox, role, run, widget) in self.planner_rows.items():
+        for planner, (radio, role, widget) in self.planner_rows.items():
             is_owner = planner == self.controller.velocity_owner
             is_shadow = planner in self.controller.shadow_planners
             failure = self.planner_failures.get(planner)
-            checkbox.setEnabled(state is ExecutionState.READY and not self.controller.selections_locked)
-            run.setEnabled(
-                state is ExecutionState.READY
-                and not self.controller.selections_locked
-                and self.controller.execution_input is not None
-                and bool(self.controller.execution_input.paths_by_planner.get(planner))
-            )
+            radio.setEnabled(state is ExecutionState.READY and not self.controller.selections_locked)
             if is_owner:
                 role.setText("EXECUTING")
                 widget.setStyleSheet("background:#2e7d32;color:white;")
@@ -1161,7 +1306,6 @@ class ExecutionConsolePage(QWidget):
                 widget.setStyleSheet("")
         self.canvas.state = state
         self.canvas.update()
-        self.error_label.setText(self.controller.error_message)
         self._refresh_summary()
 
     @staticmethod
