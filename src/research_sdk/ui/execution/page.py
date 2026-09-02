@@ -15,7 +15,16 @@ from math import atan2, cos, hypot, sin
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QEasingCurve, QPointF, QPropertyAnimation, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPointF,
+    QPropertyAnimation,
+    QRectF,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -27,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -525,6 +535,14 @@ class ExecutionConsolePage(QWidget):
         self.emergency_button.clicked.connect(lambda: self.emergency_stop())
         self.export_a_button.clicked.connect(lambda: self._export_table("a"))
         self.export_b_button.clicked.connect(lambda: self._export_table("b"))
+        self.result_a_table.customContextMenuRequested.connect(
+            lambda pos: self._show_result_table_menu(self.result_a_table, pos)
+        )
+        self.result_b_table.customContextMenuRequested.connect(
+            lambda pos: self._show_result_table_menu(self.result_b_table, pos)
+        )
+        self.result_a_table.installEventFilter(self)
+        self.result_b_table.installEventFilter(self)
         self.debug_toggle.toggled.connect(self._toggle_debug_console)
         self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
 
@@ -567,6 +585,9 @@ class ExecutionConsolePage(QWidget):
         table.setRowCount(0)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         table.setSortingEnabled(True)
+        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionMode(QTableWidget.ExtendedSelection)
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
         return table
 
     def refresh_scenarios(self) -> None:
@@ -823,10 +844,17 @@ class ExecutionConsolePage(QWidget):
     def _record_transitions(
         self, transitions: tuple[tuple[tuple[bool, int], int], ...]
     ) -> None:
+        path_lengths = {
+            (path.is_yellow, path.robot_id): len(path.points_mm)
+            for path in self.runtime.active_paths
+        }
         new = [
             (key, index)
             for key, index in transitions
             if (key[0], key[1], index) not in self.recorded_boundaries
+            # The final waypoint of a path means that robot has finished, not
+            # reached a resumable mid-run point, so it is not checkpoint-worthy.
+            and index < path_lengths.get(key, index + 1) - 1
         ]
         if not new or self.checkpoint_store is None or self.controller.execution_input is None:
             return
@@ -1310,10 +1338,12 @@ class ExecutionConsolePage(QWidget):
 
     @staticmethod
     def _populate_table(table: QTableWidget, rows: list[dict]) -> None:
+        table.setSortingEnabled(False)
         if not rows:
+            table.setRowCount(0)
+            table.setSortingEnabled(True)
             return
         columns = list(rows[0])
-        table.setSortingEnabled(False)
         table.setColumnCount(len(columns))
         table.setHorizontalHeaderLabels(columns)
         table.setRowCount(len(rows))
@@ -1327,6 +1357,57 @@ class ExecutionConsolePage(QWidget):
                     item.setBackground(QColor("#f9a825"))
                 table.setItem(row_index, column_index, item)
         table.setSortingEnabled(True)
+
+    def eventFilter(self, obj, event) -> bool:
+        if (
+            obj in (self.result_a_table, self.result_b_table)
+            and event.type() == QEvent.KeyPress
+            and event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
+        ):
+            self._delete_selected_result_rows(obj)
+            return True
+        return super().eventFilter(obj, event)
+
+    def _show_result_table_menu(self, table: QTableWidget, pos) -> None:
+        if not table.selectionModel().hasSelection():
+            return
+        menu = QMenu(self)
+        delete_action = menu.addAction(
+            "Delete selected run" if self._selected_result_row_count(table) == 1 else
+            "Delete selected runs"
+        )
+        chosen = menu.exec(table.viewport().mapToGlobal(pos))
+        if chosen is delete_action:
+            self._delete_selected_result_rows(table)
+
+    @staticmethod
+    def _selected_result_row_count(table: QTableWidget) -> int:
+        return len({index.row() for index in table.selectedIndexes()})
+
+    def _delete_selected_result_rows(self, table: QTableWidget) -> None:
+        columns = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+        if "run_id" not in columns or "planner" not in columns:
+            return
+        run_id_column = columns.index("run_id")
+        planner_column = columns.index("planner")
+        keys = {
+            (
+                table.item(row, run_id_column).text(),
+                table.item(row, planner_column).text(),
+            )
+            for row in {index.row() for index in table.selectedIndexes()}
+        }
+        if not keys:
+            return
+        self.result_rows_a = [
+            row for row in self.result_rows_a if (row.get("run_id"), row.get("planner")) not in keys
+        ]
+        self.result_rows_b = [
+            row for row in self.result_rows_b if (row.get("run_id"), row.get("planner")) not in keys
+        ]
+        self._populate_table(self.result_a_table, self.result_rows_a)
+        self._populate_table(self.result_b_table, self.result_rows_b)
+        self._log_debug(f"[RESULTS] deleted {len(keys)} run entry(ies) from the results tables")
 
     def _export_table(self, format_name: str) -> None:
         rows = self.result_rows_a if format_name == "a" else self.result_rows_b
