@@ -11,6 +11,7 @@ from time import perf_counter
 import yaml
 
 from research_sdk.config import ROBOT_RADIUS_MM
+from research_sdk.network.command_dispatcher import RobotCommandDispatcher
 from research_sdk.network.grSimPacketFactory import grSimPacketFactory
 from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.ssl_sockets import grSimSender
@@ -114,8 +115,20 @@ def planner_key(planner_cls: type | None) -> str | None:
 
 
 class ResearchRuntime:
-    def __init__(self, *, parallel_planning: bool = True, predict_motion: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        parallel_planning: bool = True,
+        predict_motion: bool = False,
+        command_send_hz: float = 100.0,
+        command_ttl_s: float = 0.2,
+    ) -> None:
         self._sender: grSimSender | None = None
+        self._command_dispatcher = RobotCommandDispatcher(
+            lambda command: self._get_sender().send_robot_command(command),
+            send_hz=command_send_hz,
+            command_ttl_s=command_ttl_s,
+        )
         self._planner = PlannerAPI()
         self._planner_key: str | None = None
         self._recorder = None
@@ -392,6 +405,7 @@ class ResearchRuntime:
         self._step_boundary_indices.clear()
         self.step_completed = False
         self.last_waypoint_transitions = ()
+        self._command_dispatcher.start()
         if paused:
             self._send_zero_to_active()
 
@@ -481,7 +495,7 @@ class ResearchRuntime:
             if self._step_mode:
                 step_finished = False
             all_arrived = False
-            self._get_sender().send_robot_command(waypoint_command(robot, path.points_mm[index]))
+            self._command_dispatcher.publish(waypoint_command(robot, path.points_mm[index]))
         self.last_waypoint_transitions = tuple(transitions)
         if self._step_mode and step_finished:
             self._send_zero_to_active()
@@ -499,6 +513,7 @@ class ResearchRuntime:
         """Best-effort zero commands; one failure never skips another robot."""
         errors = []
         keys = tuple(dict.fromkeys((*self._active_paths, *extra_robot_keys)))
+        self._command_dispatcher.stop()
         for key in keys:
             try:
                 self._send_stop(key)
@@ -526,7 +541,11 @@ class ResearchRuntime:
 
     def _send_stop(self, key: tuple[bool, int]) -> None:
         is_yellow, robot_id = key
-        self._get_sender().send_robot_command(RobotCommand(robot_id=robot_id, isYellow=is_yellow))
+        command = RobotCommand(robot_id=robot_id, isYellow=is_yellow)
+        if self._command_dispatcher.running:
+            self._command_dispatcher.publish(command)
+        else:
+            self._get_sender().send_robot_command(command)
 
     def test_grsim_connection(self) -> ConnectionProbe:
         """Verify that the configured UDP destination is routable locally.
