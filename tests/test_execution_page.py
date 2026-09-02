@@ -6,9 +6,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 import research_sdk.ui.execution.page as page_module
+from research_sdk.ui.execution.checkpoints import CheckpointStore
 from research_sdk.ui.execution.controller import ExecutionInput, ExecutionState
 from research_sdk.ui.execution.page import ExecutionConsolePage
-from research_sdk.ui.runtime import PlannedRobotPath, ResearchRuntime
+from research_sdk.ui.runtime import LiveRobot, PlannedRobotPath, ResearchRuntime
 from research_sdk.ui.scenarios import Scenario, ScenarioRobot, ScenarioStore
 from research_sdk.world.snapshot import RobotSnapshot, WorldSnapshot, empty_robot_team
 
@@ -269,4 +270,65 @@ def test_unload_scenario_clears_execution_page_and_visual_model(
     assert page.canvas.paths == ()
     assert not page.unload_button.isEnabled()
     assert not page.reset_button.isEnabled()
+    page.shutdown()
+
+
+def _run_checkpointable(page: ExecutionConsolePage, path: PlannedRobotPath) -> None:
+    page.controller.load(
+        ExecutionInput.create(
+            _scenario(),
+            {"Planner A": (path,), "Planner B": (path,)},
+            {"Planner A": PlannerA, "Planner B": PlannerB},
+        )
+    )
+    page.canvas.set_scenario(_scenario())
+    page.controller.begin_apply()
+    page.controller.confirm_apply()
+    page.controller.run("Planner A")
+    page.run_id = "run-test"
+    page.checkpoint_store = CheckpointStore(page.store.folder / "checkpoints.jsonl")
+    page.runtime.start_execution((path,))
+
+
+def test_reaching_the_final_waypoint_does_not_create_a_checkpoint(
+    monkeypatch, tmp_path
+) -> None:
+    page = _page(monkeypatch, tmp_path)
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (500.0, 0.0), (1000.0, 0.0)))
+    _run_checkpointable(page, path)
+
+    page.runtime.world_pipeline.store.publish(_snapshot(500.0))
+    page.runtime.execute_tick({(True, 1): LiveRobot(1, True, (500.0, 0.0), 0.0)})
+    page._record_transitions(page.runtime.last_waypoint_transitions)
+    assert len(page.checkpoints) == 1
+
+    page.runtime.world_pipeline.store.publish(_snapshot(1000.0))
+    page.runtime.execute_tick({(True, 1): LiveRobot(1, True, (1000.0, 0.0), 0.0)})
+    page._record_transitions(page.runtime.last_waypoint_transitions)
+    assert len(page.checkpoints) == 1
+    page.shutdown()
+
+
+def test_delete_selected_result_row_removes_it_from_both_result_tables(
+    monkeypatch, tmp_path
+) -> None:
+    page = _page(monkeypatch, tmp_path)
+    page.result_rows_a = [
+        {"run_id": "run-1", "planner": "Planner A", "score": "1"},
+        {"run_id": "run-2", "planner": "Planner A", "score": "2"},
+    ]
+    page.result_rows_b = [
+        {"run_id": "run-1", "planner": "Planner A", "detail": "x"},
+        {"run_id": "run-2", "planner": "Planner A", "detail": "y"},
+    ]
+    page._populate_table(page.result_a_table, page.result_rows_a)
+    page._populate_table(page.result_b_table, page.result_rows_b)
+
+    page.result_a_table.selectRow(1)
+    page._delete_selected_result_rows(page.result_a_table)
+
+    assert [row["run_id"] for row in page.result_rows_a] == ["run-1"]
+    assert [row["run_id"] for row in page.result_rows_b] == ["run-1"]
+    assert page.result_a_table.rowCount() == 1
+    assert page.result_b_table.rowCount() == 1
     page.shutdown()

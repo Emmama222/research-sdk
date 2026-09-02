@@ -1,3 +1,5 @@
+from math import degrees, pi
+
 import pytest
 
 from research_sdk.network.grSimPacketFactory import grSimPacketFactory
@@ -32,6 +34,17 @@ def test_scenario_replacement_packet_contains_all_robots() -> None:
     assert replacements[1].id == 4
     assert not replacements[1].yellowteam
     assert all(replacement.turnon for replacement in replacements)
+
+
+def test_scenario_replacement_orientation_is_sent_in_degrees() -> None:
+    # grSim's replacement "dir" field is degrees, unlike every other orientation
+    # value in the protocol (radians). Callers pass orientation_rad; the factory
+    # must convert, or a live checkpoint restore silently rotates robots wrong.
+    packet = grSimPacketFactory.scenario_replacement_command(
+        ({"x": 0.0, "y": 0.0, "orientation": pi / 2, "robot_id": 1, "isYellow": True},)
+    )
+
+    assert packet.replacement.robots[0].dir == pytest.approx(degrees(pi / 2))
 
 
 def test_empty_scenario_replacement_is_rejected() -> None:

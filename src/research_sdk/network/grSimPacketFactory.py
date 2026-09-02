@@ -2,6 +2,7 @@ from research_sdk.network.proto2 import grSim_Commands_pb2,grSim_Packet_pb2,grSi
 from typing import Optional
 
 import time
+from math import degrees
 from research_sdk.config import ROBOT_CHIP_KICK_SPEED_MPS, ROBOT_FLAT_KICK_SPEED_MPS
 
 class grSimPacketFactory():
@@ -121,10 +122,14 @@ class grSimPacketFactory():
     @staticmethod
     def _grSim_RobotReplacement_wrapper(x,y,orientation,robot_id,isYellow
                     ) -> grSim_Replacement_pb2.grSim_RobotReplacement:
+        # grSim's replacement "dir" field is in degrees, unlike every other
+        # orientation value in the protocol (vision, velocity), which is radians.
+        # Callers here always pass orientation_rad, so convert once at this
+        # single choke point rather than at every call site.
         fields = {
             "x"  : float(x),
             "y"  : float(y),
-            "dir": float(orientation),
+            "dir": degrees(float(orientation)),
             "id": int(robot_id),
             "yellowteam": bool(isYellow),
             "turnon": True,
