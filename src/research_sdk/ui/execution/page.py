@@ -54,7 +54,13 @@ from research_sdk.ui.execution.controller import (
     ExecutionState,
 )
 from research_sdk.ui.runtime import LiveRobot, PlannedRobotPath, ResearchRuntime
-from research_sdk.ui.scenarios import Scenario, ScenarioBall, ScenarioStore
+from research_sdk.ui.scenarios import (
+    Scenario,
+    ScenarioBall,
+    ScenarioObstacle,
+    ScenarioRobot,
+    ScenarioStore,
+)
 from research_sdk.ui.session import (
     ExperimentRecorder,
     RunMetrics,
@@ -69,6 +75,7 @@ class ExecutionFieldCanvas(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setMinimumSize(720, 480)
+        self.scenario: Scenario | None = None
         self.robots: dict[tuple[bool, int], LiveRobot] = {}
         self.last_seen: dict[tuple[bool, int], float] = {}
         self.expected_keys: set[tuple[bool, int]] = set()
@@ -78,6 +85,7 @@ class ExecutionFieldCanvas(QWidget):
         self.colliding_keys: set[tuple[bool, int]] = set()
 
     def set_scenario(self, scenario: Scenario | None) -> None:
+        self.scenario = scenario
         self.expected_keys = set()
         if scenario is not None:
             self.expected_keys = {
@@ -135,6 +143,7 @@ class ExecutionFieldCanvas(QWidget):
         centre_radius = 500 * field.width() / FIELD_LENGTH_MM
         painter.drawEllipse(field.center(), centre_radius, centre_radius)
         self._draw_boxes(painter, field)
+        self._draw_scenario(painter)
         self._draw_paths(painter)
         self._draw_robots(painter)
         if self.state in (
@@ -147,6 +156,50 @@ class ExecutionFieldCanvas(QWidget):
             badge = QRectF(field.center().x() - 85, field.top() + 14, 170, 34)
             painter.drawRoundedRect(badge, 8, 8)
             painter.drawText(badge, Qt.AlignCenter, self.state.value)
+
+    def _draw_scenario(self, painter: QPainter) -> None:
+        """Draw the loaded experiment before live execution begins."""
+        if self.scenario is None:
+            return
+        if self.scenario.ball is not None:
+            centre = self._to_screen(self.scenario.ball.position_mm)
+            radius = max(4.0, 21.5 * self._field_rect().width() / FIELD_LENGTH_MM)
+            painter.setBrush(QColor("#ff7043"))
+            painter.setPen(QPen(QColor("#ffccbc"), 1))
+            painter.drawEllipse(centre, radius, radius)
+        for obstacle in self.scenario.obstacles:
+            self._draw_scenario_obstacle(painter, obstacle)
+        for robot in self.scenario.robots:
+            self._draw_scenario_robot(painter, robot)
+
+    def _draw_scenario_obstacle(
+        self, painter: QPainter, obstacle: ScenarioObstacle
+    ) -> None:
+        centre = self._to_screen(obstacle.position_mm)
+        radius = obstacle.radius_mm * self._field_rect().width() / FIELD_LENGTH_MM
+        painter.setBrush(QColor(220, 70, 70, 180))
+        painter.setPen(QPen(QColor("#ff8a80"), 2))
+        painter.drawEllipse(centre, radius, radius)
+        painter.drawLine(centre + QPointF(-radius, -radius), centre + QPointF(radius, radius))
+        painter.drawLine(centre + QPointF(-radius, radius), centre + QPointF(radius, -radius))
+        painter.drawText(centre + QPointF(-8, -radius - 5), f"O{obstacle.obstacle_id}")
+
+    def _draw_scenario_robot(self, painter: QPainter, robot: ScenarioRobot) -> None:
+        start = self._to_screen(robot.start_mm)
+        radius = ROBOT_RADIUS_MM * self._field_rect().width() / FIELD_LENGTH_MM
+        color = QColor("#ffd740" if robot.is_yellow else "#42a5f5")
+        painter.setBrush(QColor(color.red(), color.green(), color.blue(), 100))
+        painter.setPen(QPen(color, 3))
+        painter.drawEllipse(start, radius, radius)
+        painter.drawText(start + QPointF(-8, -radius - 5), f"S{robot.robot_id}")
+        if robot.target_mm is not None:
+            target = self._to_screen(robot.target_mm)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor("#f5f5f5"), 2, Qt.DashLine))
+            painter.drawEllipse(target, radius, radius)
+            painter.drawLine(target + QPointF(-8, 0), target + QPointF(8, 0))
+            painter.drawLine(target + QPointF(0, -8), target + QPointF(0, 8))
+            painter.drawText(target + QPointF(-8, -radius - 5), f"T{robot.robot_id}")
 
     def _draw_boxes(self, painter: QPainter, field: QRectF) -> None:
         depth = DEFENCE_X_MM * field.width() / FIELD_LENGTH_MM

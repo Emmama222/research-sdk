@@ -153,3 +153,19 @@ def test_one_planner_failure_does_not_hide_successful_planner(monkeypatch, tmp_p
     assert "#b71c1c" in page.planner_rows["Planner B"][3].styleSheet()
     assert page.controller.execution_input.paths_by_planner["Planner A"]
     page.shutdown()
+
+
+def test_loading_scenario_installs_full_visual_model_on_execution_canvas(
+    monkeypatch, tmp_path
+) -> None:
+    page = _page(monkeypatch, tmp_path)
+    scenario = _scenario()
+    page.store.save(scenario)
+    page.refresh_scenarios()
+
+    page._load_scenario()
+
+    assert page.canvas.scenario is not None
+    assert page.canvas.scenario.to_dict() == scenario.to_dict()
+    assert page.canvas.expected_keys == {(True, 1)}
+    page.shutdown()
