@@ -1,42 +1,77 @@
 """Visibility Graph + Dijkstra path planner.
 
-Nothing named "visibility graph" was ever found in TurtleRabbit's own git
-history (checked: full history of `2025-TeamControl` across all 31 branches,
-and `2026-TeamControl`'s `main` branch -- every commit message, every
-filename ever committed, and every blob's content). This is a fresh
-implementation, built from two primary sources instead of recovered code:
+Origin
+------
+This is a fresh implementation, from two sources:
 
-1. **Warthog Robotics' 2025 SSL TDP** (the RoboCup team, confirmed via their
-   published paper): "treating each object in the field as a polygon. For
-   each of its vertices, the visibility towards every other vertex is
-   calculated and an edge is added between them if they are visible to
-   each other," with "every polygon carr[ying] a Minkowski Sum considering
-   the radius of a robot," searched with "an algorithm such as Dijkstra's."
-   Warthog cites the algorithm's origin as de Berg et al., *Computational
-   Geometry: Algorithms and Applications* (2008).
-2. The same de Berg et al. textbook algorithm directly, for the parts
-   Warthog's TDP doesn't spell out (how start/goal splice into the graph,
-   exact segment-intersection test) -- see `docs/algorithms.md`.
+1. **Warthog Robotics' 2025 SSL TDP**: "treating each object in the field
+   as a polygon. For each of its vertices, the visibility towards every
+   other vertex is calculated and an edge is added between them if they are
+   visible to each other," with "every polygon carr[ying] a Minkowski Sum
+   considering the radius of a robot," searched with "an algorithm such as
+   Dijkstra's." Warthog cites de Berg et al., *Computational Geometry:
+   Algorithms and Applications* (2008) as the algorithm's origin.
+2. That same de Berg et al. textbook, for the parts Warthog's TDP doesn't
+   spell out (how start/goal splice into the graph) -- see `docs/algorithms.md`.
 
-SSL obstacles are robots, i.e. circles, not native polygons. Following
-Warthog's own approach exactly ("treating each object ... as a polygon"),
-each circular obstacle is approximated here as a regular N-gon inflated by
-the robot radius + clearance (the "Minkowski Sum" Warthog describes), rather
-than doing exact circle-tangent geometry -- simpler to implement and verify
-correctly, and it's what the primary source actually documents.
+Why this isn't a plain polygon-edge test
+-----------------------------------------
+SSL obstacles are robots, i.e. circles. An earlier version of this module
+followed Warthog's "treat each object as a polygon" description literally:
+inflate each circle into a regular N-gon, then test every candidate edge
+against that polygon's *edges*. A straight-edged polygon can't equal a
+circle, so that design was always forced to pick one of two flaws:
 
-**Performance note.** The first working version of this module used numpy
-arrays for every point in the O(n^2) visibility test -- correct, but a real
-mistake: numpy's per-call overhead on 2-element arrays dominates at these
-sizes, and a 5-8 obstacle scenario (roughly 100 polygon vertices, ~5000
-candidate pairs) took up to *19 seconds* in testing, several thousand times
-over the SSL 16ms budget. Rewritten below with plain Python floats/tuples
-for the hot inner loop (numpy stays only for the one-time polygon
-generation, which isn't in the O(n^2) path) plus a cheap bounding-circle
-broad-phase check per polygon -- see `_segment_could_hit_polygon`. Both
-changes together brought the worst case in `scripts/demo_planners.py`'s
-30-trial stress test from ~19s down to low milliseconds; rerun that script
-if you change this file to make sure it stays there.
+- **Circumscribed** (safe for edge-blocking, since it never cuts inside the
+  circle) -- but its corners reach past the true clearance circle, which
+  false-rejected valid start/goal points landing in a corner's gap.
+- **Inscribed** (accurate for containment) -- but its edges cut inside the
+  true clearance, letting a path graze closer to an obstacle than intended.
+
+No single polygon gets both right, because the obstacle isn't really a
+polygon at all -- it's a circle.
+
+The fix: check against the real circle
+----------------------------------------
+This version drops the polygon-edge test and checks every candidate edge
+against the exact circle instead (point/segment-to-centre distance vs. the
+true clearance radius, via `_dist_point_to_segment`). That settles both
+concerns exactly, with zero approximation error:
+
+- **Containment** ("is this point inside the obstacle?")
+- **Edge-blocking** ("does this segment cross the obstacle?")
+
+It's simpler too -- no segment-intersection code, no separate broad-phase
+pass, since the exact test is already O(1) per obstacle.
+
+One polygon still remains: waypoint placement
+-----------------------------------------------
+A regular N-gon is still used, but only to decide *where the candidate
+waypoints go* (Warthog's "treat each object as a polygon" idea, applied
+just to node placement). It's still circumscribed slightly outside the true
+clearance circle -- not for the old reason, but because a hop between two
+*adjacent* waypoints of the same obstacle is a chord of that obstacle's
+circle, and any chord passes strictly inside its circle except at its own
+endpoints. Waypoints placed exactly on the true circle would make every
+boundary-hugging hop cut a little inside the real clearance. Circumscribing
+them (`radius / cos(pi / sides)`, same formula as before) makes that chord
+exactly tangent to the true circle instead, at essentially no extra detour.
+
+Containment checks never look at this polygon -- they compare straight-line
+distance to the true clearance radius directly -- so this can't reintroduce
+the corner-gap bug that motivated the rewrite.
+
+Performance note
+-----------------
+The first working version of this module used numpy arrays for every point
+in the O(n^2) visibility test -- correct, but a real mistake: numpy's
+per-call overhead on 2-element arrays dominates at these sizes, and a 5-8
+obstacle scenario (roughly 100 polygon vertices, ~5000 candidate pairs)
+took up to *19 seconds* in testing, several thousand times over the SSL
+16ms budget. This version keeps the fix: plain Python floats/tuples for the
+hot inner loop (numpy stays only for the one-time polygon generation, which
+isn't in the O(n^2) path). Rerun `scripts/demo_planners.py` if you change
+this file to make sure it stays fast.
 """
 
 from __future__ import annotations
@@ -58,79 +93,33 @@ from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, Planne
 
 Point = tuple[float, float]
 
+# Waypoints sit exactly on their obstacle's clearance circle (see
+# `_circle_waypoints`), so a segment ending at one has its closest approach
+# to that circle's centre land exactly on the waypoint itself, at a distance
+# equal to the radius up to floating-point noise. Without this tolerance,
+# that exact boundary *touch* -- not a real intrusion -- would compare as
+# "inside" and self-block every waypoint from ever connecting to anything.
+_BOUNDARY_EPS_MM = 1e-6
 
-def _inflate_circle_to_polygon(centre: Point, radius: float, sides: int) -> list[Point]:
-    """Conservatively approximate an inflated circle with a regular polygon.
 
-    This *is* the "Minkowski Sum considering the radius of a robot" Warthog's
-    TDP describes, specialised to a circular base shape (an SSL robot):
-    inflating a circle by another circle's radius just grows the radius, and
-    a polygon is what a segment-intersection visibility test needs to work
-    against.
+def _circle_waypoints(centre: Point, clearance_radius: float, sides: int) -> list[Point]:
+    """Candidate waypoints spread evenly around an obstacle's clearance circle.
+
+    Circumscribed slightly outside `clearance_radius` (see the module
+    docstring) purely so a hop between two adjacent waypoints stays tangent
+    to the true clearance circle instead of cutting inside it -- this only
+    affects where waypoints sit, never whether a point or segment counts as
+    colliding (that's always checked against `clearance_radius` directly).
     """
     if sides < 3:
         raise ValueError("polygon_sides must be at least 3")
     cx, cy = centre
+    vertex_radius = clearance_radius / math.cos(math.pi / sides)
     step = 2.0 * math.pi / sides
-    # Use a circumscribed polygon: the requested clearance is the apothem.
-    # An inscribed hexagon would cut materially inside the collision radius.
-    vertex_radius = radius / math.cos(math.pi / sides)
     return [
-        (
-            cx + vertex_radius * math.cos(i * step),
-            cy + vertex_radius * math.sin(i * step),
-        )
+        (cx + vertex_radius * math.cos(i * step), cy + vertex_radius * math.sin(i * step))
         for i in range(sides)
     ]
-
-
-def _orientation(a: Point, b: Point, c: Point) -> float:
-    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-
-
-def _on_segment(a: Point, b: Point, c: Point) -> bool:
-    # c is known to be collinear with a-b; check it's within the bbox.
-    return (
-        min(a[0], b[0]) - 1e-9 <= c[0] <= max(a[0], b[0]) + 1e-9
-        and min(a[1], b[1]) - 1e-9 <= c[1] <= max(a[1], b[1]) + 1e-9
-    )
-
-
-def _segments_intersect(p0: Point, p1: Point, p2: Point, p3: Point) -> bool:
-    """True if closed segments p0->p1 and p2->p3 properly or improperly intersect.
-
-    Standard orientation-based test (as in de Berg et al., ch. 2), including
-    the collinear-overlap edge cases.
-    """
-    d1 = _orientation(p2, p3, p0)
-    d2 = _orientation(p2, p3, p1)
-    d3 = _orientation(p0, p1, p2)
-    d4 = _orientation(p0, p1, p3)
-
-    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and (
-        (d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)
-    ):
-        return True
-
-    if abs(d1) < 1e-9 and _on_segment(p2, p3, p0):
-        return True
-    if abs(d2) < 1e-9 and _on_segment(p2, p3, p1):
-        return True
-    if abs(d3) < 1e-9 and _on_segment(p0, p1, p2):
-        return True
-    return bool(abs(d4) < 1e-9 and _on_segment(p0, p1, p3))
-
-
-def _point_in_polygon(point: Point, polygon: list[Point]) -> bool:
-    """Standard ray-casting point-in-polygon test."""
-    x, y = point
-    inside = False
-    xj, yj = polygon[-1]
-    for xi, yi in polygon:
-        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi:
-            inside = not inside
-        xj, yj = xi, yi
-    return inside
 
 
 def _dist_point_to_segment(point: Point, a: Point, b: Point) -> float:
@@ -147,81 +136,27 @@ def _dist_point_to_segment(point: Point, a: Point, b: Point) -> float:
     return math.hypot(px - closest_x, py - closest_y)
 
 
-def _segment_could_hit_polygon(
-    p0: Point, p1: Point, centre: Point, bounding_radius: float
-) -> bool:
-    """Cheap broad-phase rejection: could this segment possibly touch the polygon?
-
-    Every vertex of an inflated obstacle's polygon lies exactly on a circle
-    of `bounding_radius` around `centre` (see `_inflate_circle_to_polygon`),
-    so if the segment stays farther than that from `centre`, it cannot cross
-    or enter the polygon -- skip the O(sides) detailed test entirely. This
-    is what turns the worst-case stress test from ~19s into low
-    milliseconds: most obstacle pairs in a scattered scenario are
-    irrelevant to most segments, and this check is O(1).
-    """
-    return _dist_point_to_segment(centre, p0, p1) <= bounding_radius
-
-
-def _segment_blocked_by_polygon(p0: Point, p1: Point, polygon: list[Point]) -> bool:
-    """True if segment p0->p1 crosses any edge of `polygon`, or passes through its interior.
-
-    A segment that only touches a shared vertex (the usual case for edges
-    fanning out of that vertex) is *not* considered blocked -- that's how a
-    polygon's own vertices stay mutually visible along its boundary.
-
-    Callers should special-case two vertices that are adjacent on the same
-    polygon (see `plan()`) rather than route them through here: the midpoint
-    of a boundary edge sits exactly on that polygon's own boundary, where
-    ray-casting point-in-polygon is a coin-flip on floating-point rounding.
-    Anything that reaches this function is assumed *not* to be that case.
-    """
-    n = len(polygon)
-    for i in range(n):
-        a = polygon[i]
-        b = polygon[(i + 1) % n]
-        # Skip edges that share an endpoint with the segment being tested --
-        # touching your own polygon's vertex is not a collision.
-        if a == p0 or a == p1 or b == p0 or b == p1:
-            continue
-        if _segments_intersect(p0, p1, a, b):
-            return True
-
-    # Segment could pass fully through the polygon without crossing an edge
-    # only if both endpoints are themselves interior points that aren't
-    # polygon vertices (rare for a visibility graph, since one of p0/p1 is
-    # always a graph vertex on some polygon's boundary or the free-standing
-    # start/goal) -- guard against it anyway via a midpoint point-in-polygon
-    # check, which is cheap.
-    midpoint = ((p0[0] + p1[0]) / 2.0, (p0[1] + p1[1]) / 2.0)
-    return _point_in_polygon(midpoint, polygon)
-
-
 def _visible(
     p0: Point,
     p1: Point,
-    polygons: list[list[Point]],
-    polygon_centres: list[Point],
-    polygon_bounding_radii: list[float],
+    centres: list[Point],
+    radii: list[float],
     *,
-    same_polygon_idx: int | None = None,
+    skip_idx: int | None = None,
 ) -> bool:
-    """True if p0 and p1 see each other around every obstacle polygon.
+    """True if the segment p0->p1 stays outside every obstacle's clearance circle.
 
-    `same_polygon_idx`, when given, marks that p0 and p1 are two vertices of
-    `polygons[same_polygon_idx]` that are adjacent on its boundary -- that
-    edge is always visible (it *is* the boundary) and is skipped rather than
-    run through the interior test, which is numerically unreliable exactly
-    on a polygon's own edge.
+    `skip_idx`, when given, marks that p0 and p1 are two waypoints generated
+    from the *same* obstacle (`skip_idx`) that are adjacent on its
+    circle -- that chord is the obstacle's own boundary and is always
+    visible, so its own circle is excluded from the check (its distance to
+    that chord equals the clearance radius almost exactly, which is a
+    floating-point coin-flip rather than a real collision).
     """
-    for idx, polygon in enumerate(polygons):
-        if idx == same_polygon_idx:
+    for idx, (centre, radius) in enumerate(zip(centres, radii)):
+        if idx == skip_idx:
             continue
-        if not _segment_could_hit_polygon(
-            p0, p1, polygon_centres[idx], polygon_bounding_radii[idx]
-        ):
-            continue
-        if _segment_blocked_by_polygon(p0, p1, polygon):
+        if _dist_point_to_segment(centre, p0, p1) < radius - _BOUNDARY_EPS_MM:
             return False
     return True
 
@@ -233,22 +168,24 @@ def plan(
     skip_direct_path: bool = False,
     record: StepRecorder | None = None,
 ) -> PlanResult:
-    """Plan a path with a Minkowski-inflated visibility graph + Dijkstra.
+    """Plan a path with a circle-exact visibility graph + Dijkstra.
 
-    Builds one inflated polygon per obstacle, connects every pair of
-    mutually-visible vertices (across all polygons, plus start and goal) with
-    an edge, and runs Dijkstra for the shortest path -- matching Warthog's
-    TDP description exactly. Nominal complexity is O(n^2) segment tests for
-    n total vertices, same as the "original algorithm ... O(n^2 log n)"
-    Warthog's TDP cites (their extra log n factor is a sweep-line
-    construction; this uses the simpler brute-force all-pairs test with a
-    bounding-circle broad phase, which is fine at SSL vertex counts -- see
-    the module docstring's performance note).
+    Generates `polygon_sides` candidate waypoints spread around each
+    obstacle's true clearance circle, connects every pair of
+    mutually-visible waypoints (across all obstacles, plus start and goal)
+    with an edge -- checked against the exact clearance circle, not a
+    polygon approximation of it -- and runs Dijkstra for the shortest path.
+    This matches Warthog's TDP description ("treating each object ... as a
+    polygon[,] ... visibility towards every other vertex ... calculated")
+    for where the graph's nodes come from, while checking collisions
+    against the real circle those nodes were generated from (see the module
+    docstring for why: no single polygon can both safely bound a circle and
+    accurately test containment against it).
 
     ``record``, if given a :class:`~research_sdk.planners.common.StepRecorder`,
-    gets a log of every polygon inflated and every vertex pair tested for
-    visibility (see ``algorithms.viz.animate_construction``). Leave it
-    ``None`` (the default) for normal/timed planning calls.
+    gets a log of every obstacle's candidate waypoints and every vertex pair
+    tested for visibility (see ``algorithms.viz.animate_construction``).
+    Leave it ``None`` (the default) for normal/timed planning calls.
 
     ``skip_direct_path=True`` forces the full visibility-graph build even
     when start and goal see each other directly -- for planner comparisons
@@ -263,45 +200,34 @@ def plan(
     goal: Point = (float(request.goal_mm[0]), float(request.goal_mm[1]))
     total_clearance = request.total_clearance_mm
 
-    polygons: list[list[Point]] = []
-    polygon_centres: list[Point] = []
-    polygon_bounding_radii: list[float] = []
+    centres: list[Point] = []
+    radii: list[float] = []
+    waypoints_by_obstacle: list[list[Point]] = []
     for obs in request.obstacles:
         # total_clearance is robot_radius_mm + clearance_mm (see
         # PlanRequest.total_clearance_mm) -- the Minkowski-sum radius is the
         # obstacle's own physical radius plus that, so both bodies (and the
-        # safety margin) stay clear of each other. Previously this
-        # subtracted robot_radius_mm back out, which cancelled it entirely
-        # and left obstacles inflated by only their own radius + clearance,
-        # ignoring the planning robot's own footprint -- matching neither
-        # the UI's rendered obstacle boundary (`app.py`'s
-        # `_draw_planner_obstacle`) nor `_safety_clearance_radius` in
-        # `waypoint_manager.py`, and letting paths cut through obstacles.
-        inflate_radius = obs.radius_mm + total_clearance
+        # safety margin) stay clear of each other.
         centre = (float(obs.pos_mm[0]), float(obs.pos_mm[1]))
-        polygons.append(_inflate_circle_to_polygon(centre, inflate_radius, polygon_sides))
-        polygon_centres.append(centre)
-        # Broad-phase bounding radius must cover the polygon's actual extent,
-        # i.e. the *circumscribed* vertex radius -- not the apothem
-        # (`inflate_radius`) the polygon was built from. Using the smaller
-        # apothem here let segments that pass between the apothem and the
-        # true vertex radius skip the real intersection test entirely,
-        # falsely reporting clear line-of-sight through the obstacle.
-        vertex_radius = inflate_radius / math.cos(math.pi / polygon_sides)
-        polygon_bounding_radii.append(vertex_radius)
+        radius = obs.radius_mm + total_clearance
+        centres.append(centre)
+        radii.append(radius)
+        waypoints_by_obstacle.append(_circle_waypoints(centre, radius, polygon_sides))
 
     if record is not None:
         record.log(
             "obstacles",
             start=start,
             goal=goal,
-            polygons=[list(p) for p in polygons],
+            polygons=[list(p) for p in waypoints_by_obstacle],
             field_length_mm=request.field_length_mm,
             field_width_mm=request.field_width_mm,
         )
 
-    for polygon in polygons:
-        if _point_in_polygon(start, polygon) or _point_in_polygon(goal, polygon):
+    for centre, radius in zip(centres, radii):
+        dist_start = math.hypot(start[0] - centre[0], start[1] - centre[1])
+        dist_goal = math.hypot(goal[0] - centre[0], goal[1] - centre[1])
+        if dist_start <= radius or dist_goal <= radius:
             return PlanResult(
                 success=False,
                 waypoints_mm=(),
@@ -312,9 +238,7 @@ def plan(
 
     # Direct line-of-sight shortcut, same as the PRM planner and Warthog's
     # own "adoption of ... a valid collision-free geometric path."
-    if not skip_direct_path and _visible(
-        start, goal, polygons, polygon_centres, polygon_bounding_radii
-    ):
+    if not skip_direct_path and _visible(start, goal, centres, radii):
         waypoints = (start, goal)
         if record is not None:
             record.log("path", waypoints=waypoints, direct=True)
@@ -327,18 +251,18 @@ def plan(
             message="direct line of sight, visibility graph skipped",
         )
 
-    # Each vertex is (point, owning_polygon_index_or_None, index_within_polygon).
-    # start/goal own no polygon, so their membership is (None, None).
+    # Each vertex is (point, owning_obstacle_index_or_None, index_within_obstacle).
+    # start/goal own no obstacle, so their membership is (None, None).
     all_vertices: list[Point] = [start, goal]
     vertex_labels: list[str] = ["start", "goal"]
-    vertex_polygon: list[int | None] = [None, None]
+    vertex_obstacle: list[int | None] = [None, None]
     vertex_local_idx: list[int | None] = [None, None]
-    for poly_idx, polygon in enumerate(polygons):
-        for vert_idx, vertex in enumerate(polygon):
-            all_vertices.append(vertex)
-            vertex_labels.append(f"p{poly_idx}v{vert_idx}")
-            vertex_polygon.append(poly_idx)
-            vertex_local_idx.append(vert_idx)
+    for obs_idx, waypoints in enumerate(waypoints_by_obstacle):
+        for local_idx, point in enumerate(waypoints):
+            all_vertices.append(point)
+            vertex_labels.append(f"p{obs_idx}v{local_idx}")
+            vertex_obstacle.append(obs_idx)
+            vertex_local_idx.append(local_idx)
 
     graph = nx.Graph()
     graph.add_nodes_from(vertex_labels)
@@ -346,37 +270,30 @@ def plan(
     n = len(all_vertices)
     for i in range(n):
         p_i = all_vertices[i]
-        poly_i = vertex_polygon[i]
+        obs_i = vertex_obstacle[i]
         for j in range(i + 1, n):
             p_j = all_vertices[j]
 
-            same_polygon_idx: int | None = None
-            if poly_i is not None and poly_i == vertex_polygon[j]:
-                sides = len(polygons[poly_i])
+            skip_idx: int | None = None
+            if obs_i is not None and obs_i == vertex_obstacle[j]:
+                sides = len(waypoints_by_obstacle[obs_i])
                 local_gap = abs(vertex_local_idx[i] - vertex_local_idx[j])
                 is_adjacent = local_gap == 1 or local_gap == sides - 1
                 if is_adjacent:
-                    # Boundary edge of its own polygon: always visible, skip
-                    # both the interior test against this polygon (see
-                    # `_visible`'s docstring) and the redundant "same
-                    # polygon" collinearity concern entirely.
-                    same_polygon_idx = poly_i
+                    # Chord along its own obstacle's boundary: always
+                    # visible with respect to that obstacle, skip it (see
+                    # `_visible`'s docstring).
+                    skip_idx = obs_i
                 else:
-                    # Non-adjacent vertices of a convex polygon: the chord
-                    # between them runs through the polygon's own interior,
-                    # so they are never mutually visible. Skip the O(edges)
-                    # test against every *other* polygon too, since this
+                    # Non-adjacent waypoints of the same obstacle: the chord
+                    # between two points on a circle always passes through
+                    # that circle's own interior, so they can never be
+                    # mutually visible around their own obstacle. Skip the
+                    # test against every *other* obstacle too, since this
                     # pair can never be an edge in the graph regardless.
                     continue
 
-            visible = _visible(
-                p_i,
-                p_j,
-                polygons,
-                polygon_centres,
-                polygon_bounding_radii,
-                same_polygon_idx=same_polygon_idx,
-            )
+            visible = _visible(p_i, p_j, centres, radii, skip_idx=skip_idx)
             if record is not None:
                 record.log("edge_test", a=p_i, b=p_j, accepted=visible)
             if visible:
