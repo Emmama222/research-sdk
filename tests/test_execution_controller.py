@@ -79,19 +79,16 @@ def test_run_requires_ready_and_claims_exclusive_owner() -> None:
         controller.run("Planner B")
 
 
-def test_shadow_selection_locks_until_reset() -> None:
+def test_selections_lock_until_reset() -> None:
     controller = ready_controller()
-    controller.set_shadow("Planner B", True)
     controller.run("Planner A")
 
-    with pytest.raises(RuntimeError):
-        controller.set_shadow("Planner B", False)
+    assert controller.selections_locked
 
     controller.stop()
     controller.begin_reset()
     controller.reset_without_apply()
     assert not controller.selections_locked
-    assert not controller.shadow_planners
 
 
 def test_pause_continue_and_complete_transitions() -> None:

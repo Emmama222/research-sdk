@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTabWidget,
-    QToolBar,
     QToolTip,
     QVBoxLayout,
     QWidget,
@@ -71,9 +70,8 @@ from research_sdk.ui.session import (
     SessionState,
     discover_planners,
     export_planner_results,
+    planner_debug_geometry,
 )
-from research_sdk.world.map.voronoi.voronoi_generator import generate_bounded_voronoi_map
-from research_sdk.world.scene import PlanningObstacle
 
 CONFIG_FOLDER = Path(__file__).resolve().parents[1] / "config"
 EDITABLE_CONFIGS = (
@@ -1102,7 +1100,7 @@ class ScenarioPlannerPage(QWidget):
                     f"({failed_ids}) -- flagged red, held in place"
                 )
         planning_ms = sum(self.runtime.last_plan_durations_ms)
-        nodes, edges = self._debug_geometry(label, recorder)
+        nodes, edges = planner_debug_geometry(label, recorder, tuple(self.scenario.obstacles))
         if recorder.map_time_ms is not None:
             # A full build happened this call and logged into StepRecorder
             # -- all three planners support this now (VisibilityGraph, PRM,
@@ -1139,42 +1137,6 @@ class ScenarioPlannerPage(QWidget):
         self.metrics = {label: run_metrics}
         self._planner_changed()
         self.status.setText(f"Planned {label}; no velocities sent{failure_note}")
-
-    def _debug_geometry(
-        self, label: str, recorder: StepRecorder
-    ) -> tuple[
-        tuple[tuple[float, float], ...],
-        tuple[tuple[tuple[float, float], tuple[float, float]], ...],
-    ]:
-        nodes = []
-        edges = []
-        for step in recorder.steps:
-            if step["kind"] == "sample" and step.get("free"):
-                nodes.append(tuple(step["point"]))
-            elif step["kind"] == "edge_test" and step.get("accepted"):
-                first = tuple(step["a"])
-                second = tuple(step["b"])
-                edges.append((first, second))
-                nodes.extend((first, second))
-        if "Voronoi" in label and self.scenario is not None:
-            obstacles = tuple(
-                PlanningObstacle(
-                    robot_id=obstacle.obstacle_id,
-                    isYellow=obstacle.is_yellow,
-                    pos_mm=obstacle.position_mm,
-                    radius_mm=obstacle.radius_mm,
-                )
-                for obstacle in self.scenario.obstacles
-            )
-            voronoi_map = generate_bounded_voronoi_map(obstacles=obstacles)
-            by_id = {node.id: (node.x, node.y) for node in voronoi_map.nodes}
-            nodes = list(by_id.values())
-            edges = [
-                (by_id[edge.start_id], by_id[edge.end_id])
-                for edge in voronoi_map.edges
-                if edge.start_id in by_id and edge.end_id in by_id
-            ]
-        return tuple(dict.fromkeys(nodes)), tuple(edges)
 
     def _clear_preview(self) -> None:
         self.previews = {
@@ -1366,7 +1328,6 @@ class ResearchConsole(QMainWindow):
         self.execution_page.navigate_to_planner.connect(
             lambda: self.tabs.setCurrentWidget(self.scenario_planner_page)
         )
-        self._build_toolbar()
         self._refresh_scenarios()
         self._refresh_controls()
         self._start_live_grsim_display()
@@ -1376,17 +1337,6 @@ class ResearchConsole(QMainWindow):
         self.display_vision_thread.packet_received.connect(self._live_grsim_packet_received)
         self.display_vision_thread.failed.connect(self._live_grsim_failed)
         self.display_vision_thread.start()
-
-    def _build_toolbar(self) -> None:
-        toolbar = QToolBar("View")
-        self.addToolBar(toolbar)
-        map_action = QAction("Display map", self, checkable=True)
-        map_action.setChecked(True)
-        map_action.toggled.connect(self.live_canvas.setVisible)
-        map_action.toggled.connect(self.canvas.setVisible)
-        map_action.toggled.connect(self.execution_page.canvas.setVisible)
-        map_action.toggled.connect(self.scenario_planner_page.canvas.setVisible)
-        toolbar.addAction(map_action)
 
     def _build_experiment_page(self) -> None:
         self.live_canvas = FieldCanvas()

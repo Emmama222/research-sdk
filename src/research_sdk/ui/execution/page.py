@@ -60,6 +60,7 @@ from research_sdk.config import (
     ROBOT_RADIUS_MM,
 )
 from research_sdk.network.robot_command import RobotCommand
+from research_sdk.planners.common import StepRecorder
 from research_sdk.ui.execution.apply_verifier import ApplyReport, ScenarioApplyVerifier
 from research_sdk.ui.execution.checkpoints import CheckpointRecord, CheckpointStore
 from research_sdk.ui.execution.controller import (
@@ -79,6 +80,7 @@ from research_sdk.ui.session import (
     ExperimentRecorder,
     RunMetrics,
     discover_planners,
+    planner_debug_geometry,
 )
 from research_sdk.world.snapshot import WorldSnapshot
 
@@ -101,6 +103,9 @@ class ExecutionFieldCanvas(QWidget):
         self.waypoint_indices: dict[tuple[bool, int], int] = {}
         self.state = ExecutionState.NO_SCENARIO
         self.colliding_keys: set[tuple[bool, int]] = set()
+        self.show_map_layer = True
+        self.debug_nodes: tuple[tuple[float, float], ...] = ()
+        self.debug_edges: tuple[tuple[tuple[float, float], tuple[float, float]], ...] = ()
 
     def set_scenario(self, scenario: Scenario | None) -> None:
         self.scenario = scenario
@@ -161,6 +166,8 @@ class ExecutionFieldCanvas(QWidget):
         centre_radius = 500 * field.width() / FIELD_LENGTH_MM
         painter.drawEllipse(field.center(), centre_radius, centre_radius)
         self._draw_boxes(painter, field)
+        if self.show_map_layer:
+            self._draw_debug_map(painter)
         self._draw_scenario(painter)
         self._draw_paths(painter)
         self._draw_robots(painter)
@@ -178,6 +185,15 @@ class ExecutionFieldCanvas(QWidget):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.resized.emit()
+
+    def _draw_debug_map(self, painter: QPainter) -> None:
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(144, 202, 249, 120), 1))
+        for first, second in self.debug_edges:
+            painter.drawLine(self._to_screen(first), self._to_screen(second))
+        painter.setBrush(QColor(144, 202, 249, 170))
+        for node in self.debug_nodes:
+            painter.drawEllipse(self._to_screen(node), 2.5, 2.5)
 
     def _draw_scenario(self, painter: QPainter) -> None:
         """Draw the loaded experiment before live execution begins."""
@@ -332,6 +348,13 @@ class ExecutionConsolePage(QWidget):
         self.planners = discover_planners()
         self.planner_rows: dict[str, tuple[QRadioButton, QLabel, QWidget]] = {}
         self.planner_failures: dict[str, str] = {}
+        self.debug_geometry: dict[
+            str,
+            tuple[
+                tuple[tuple[float, float], ...],
+                tuple[tuple[tuple[float, float], tuple[float, float]], ...],
+            ],
+        ] = {}
         self.current_metrics: dict[str, RunMetrics] = {}
         self.metric_templates: dict[str, RunMetrics] = {}
         self.result_rows_a: list[dict] = []
@@ -478,6 +501,11 @@ class ExecutionConsolePage(QWidget):
         map_layout = QVBoxLayout(map_panel)
         map_layout.setContentsMargins(0, 0, 0, 0)
         map_layout.setSpacing(4)
+        self.map_layer_toggle = QToolButton()
+        self.map_layer_toggle.setText("Map")
+        self.map_layer_toggle.setCheckable(True)
+        self.map_layer_toggle.setChecked(True)
+        map_layout.addWidget(self.map_layer_toggle, 0, Qt.AlignLeft)
         map_layout.addWidget(self.canvas, 1)
 
         self.debug_toggle = QToolButton()
@@ -544,7 +572,12 @@ class ExecutionConsolePage(QWidget):
         self.result_a_table.installEventFilter(self)
         self.result_b_table.installEventFilter(self)
         self.debug_toggle.toggled.connect(self._toggle_debug_console)
+        self.map_layer_toggle.toggled.connect(self._toggle_map_layer)
         self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
+
+    def _toggle_map_layer(self, checked: bool) -> None:
+        self.canvas.show_map_layer = checked
+        self.canvas.update()
 
     def _toggle_debug_console(self, expanded: bool) -> None:
         self.debug_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
@@ -613,8 +646,10 @@ class ExecutionConsolePage(QWidget):
             planner_classes = {}
             metrics = {}
             failures = {}
+            debug_geometry = {}
             for label, planner_cls in self.planners.items():
-                self.runtime.set_planner(planner_cls)
+                recorder = StepRecorder()
+                self.runtime.set_planner(planner_cls, record=recorder)
                 planner_classes[label] = planner_cls
                 planner_metrics = RunMetrics()
                 try:
@@ -632,6 +667,9 @@ class ExecutionConsolePage(QWidget):
                     self.runtime.last_plan_failures,
                 )
                 metrics[label] = planner_metrics
+                debug_geometry[label] = planner_debug_geometry(
+                    label, recorder, tuple(scenario.obstacles)
+                )
             if not any(paths_by_planner.values()):
                 details = "; ".join(
                     f"{planner}: {message}" for planner, message in failures.items()
@@ -640,6 +678,7 @@ class ExecutionConsolePage(QWidget):
             self.planner_failures = failures
             self.metric_templates = metrics
             self.current_metrics = deepcopy(metrics)
+            self.debug_geometry = debug_geometry
             self.controller.load(
                 ExecutionInput.create(scenario, paths_by_planner, planner_classes)
             )
@@ -655,6 +694,7 @@ class ExecutionConsolePage(QWidget):
             self.verifier = None
             self.last_apply_report = None
             self.planner_failures.clear()
+            self.debug_geometry.clear()
             self.canvas.set_scenario(None)
             self.canvas.paths = ()
             self.canvas.waypoint_indices.clear()
@@ -923,7 +963,6 @@ class ExecutionConsolePage(QWidget):
             ),
             waypoint_indexes=indexes,
             velocity_owner=self.controller.velocity_owner or "",
-            shadow_planners=tuple(sorted(self.controller.shadow_planners)),
             path_ids={
                 f"{'Y' if path.is_yellow else 'B'}{path.robot_id}": f"path-{path.robot_id}"
                 for path in self.runtime.active_paths
@@ -1020,8 +1059,6 @@ class ExecutionConsolePage(QWidget):
         owner = checkpoint.velocity_owner
         self.controller.velocity_owner = None
         self.controller.selections_locked = False
-        for planner in checkpoint.shadow_planners:
-            self.controller.set_shadow(planner, True)
         paths = self.controller.run(owner)
         indexes = {_parse_robot_key(key): value for key, value in checkpoint.waypoint_indexes.items()}
         self.runtime.start_execution(paths, waypoint_indices=indexes, paused=True)
@@ -1076,20 +1113,16 @@ class ExecutionConsolePage(QWidget):
             return
         now = datetime.now(UTC).isoformat()
         owner = self.controller.velocity_owner
-        participants = set(self.controller.shadow_planners)
-        if owner is not None:
-            participants.add(owner)
-        for planner, metrics in self.current_metrics.items():
-            if planner not in participants:
-                continue
-            metrics.finish(completed=completed and planner == owner)
+        metrics = self.current_metrics.get(owner) if owner is not None else None
+        if owner is not None and metrics is not None:
+            metrics.finish(completed=completed)
             common = {
                 "run_id": self.run_id,
                 "scenario": self.controller.execution_input.scenario.name
                 if self.controller.execution_input
                 else "",
-                "planner": planner,
-                "role": "EXECUTING" if planner == owner else "SHADOW",
+                "planner": owner,
+                "role": "EXECUTING",
                 "run_kind": self.run_kind,
                 "parent_run_id": self.parent_run_id or "",
                 "checkpoint_id": self.source_checkpoint_id or "",
@@ -1277,6 +1310,10 @@ class ExecutionConsolePage(QWidget):
         self.step_button.setEnabled(is_paused and not self._stepping)
         self.previous_step_button.setEnabled(self.checkpoint_selector.currentIndex() > 0)
         selected_planner = self._selected_planner()
+        debug_nodes, debug_edges = self.debug_geometry.get(selected_planner, ((), ()))
+        self.canvas.debug_nodes = debug_nodes
+        self.canvas.debug_edges = debug_edges
+        self.map_layer_toggle.setEnabled(bool(debug_nodes or debug_edges))
         selected_paths = (
             ()
             if self.controller.execution_input is None
@@ -1315,15 +1352,11 @@ class ExecutionConsolePage(QWidget):
         self.motion_test_button.setEnabled(loadable)
         for planner, (radio, role, widget) in self.planner_rows.items():
             is_owner = planner == self.controller.velocity_owner
-            is_shadow = planner in self.controller.shadow_planners
             failure = self.planner_failures.get(planner)
             radio.setEnabled(state is ExecutionState.READY and not self.controller.selections_locked)
             if is_owner:
                 role.setText("EXECUTING")
                 widget.setStyleSheet("background:#2e7d32;color:white;")
-            elif is_shadow:
-                role.setText("SHADOW")
-                widget.setStyleSheet("background:#f9a825;color:#101010;")
             elif failure:
                 role.setText("ERROR")
                 role.setToolTip(failure)
@@ -1353,8 +1386,6 @@ class ExecutionConsolePage(QWidget):
                 if row.get("role") == "EXECUTING":
                     item.setBackground(QColor("#2e7d32"))
                     item.setForeground(QColor("#ffffff"))
-                elif row.get("role") == "SHADOW":
-                    item.setBackground(QColor("#f9a825"))
                 table.setItem(row_index, column_index, item)
         table.setSortingEnabled(True)
 

@@ -21,7 +21,6 @@ class CheckpointRecord:
     ball: dict[str, Any] | None
     waypoint_indexes: dict[str, int]
     velocity_owner: str
-    shadow_planners: tuple[str, ...]
     path_ids: dict[str, str]
     metrics: dict[str, Any]
     state: str
@@ -40,7 +39,6 @@ class CheckpointRecord:
         values.pop("event", None)
         values["triggers"] = tuple(values["triggers"])
         values["robots"] = tuple(values["robots"])
-        values["shadow_planners"] = tuple(values["shadow_planners"])
         return cls(**values)
 
 

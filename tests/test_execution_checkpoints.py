@@ -13,7 +13,6 @@ def checkpoint() -> CheckpointRecord:
         ball=None,
         waypoint_indexes={"Y1": 2},
         velocity_owner="Planner A",
-        shadow_planners=("Planner B",),
         path_ids={"Y1": "path-1"},
         metrics={"elapsed_ms": 50.0},
         state="RUNNING",
