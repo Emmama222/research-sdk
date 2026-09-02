@@ -36,7 +36,7 @@ def test_routes_around_single_obstacle():
     assert len(result.waypoints_mm) >= 2
 
     total_clearance = request.total_clearance_mm
-    inflated_radius = obstacle.radius_mm + (total_clearance - request.robot_radius_mm)
+    inflated_radius = obstacle.radius_mm + total_clearance
     for (x0, y0), (x1, y1) in zip(result.waypoints_mm, result.waypoints_mm[1:]):
         # sample along the segment and check clearance from the obstacle centre
         for t in [i / 20 for i in range(21)]:

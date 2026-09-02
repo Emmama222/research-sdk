@@ -132,12 +132,19 @@ def plan(
     obstacle_centres = np.array(
         [obs.pos_mm for obs in request.obstacles], dtype=float
     ).reshape(-1, 2)
-    # Inflate each obstacle by (its own radius + clearance). total_clearance
-    # already folds in the *planning robot's* radius, so subtract it back out
-    # here to avoid double-counting it against the obstacle's own size.
+    # Inflate each obstacle by its own radius plus total_clearance (the
+    # planning robot's radius + safety margin -- see
+    # PlanRequest.total_clearance_mm), so both bodies stay clear of each
+    # other. Previously this subtracted robot_radius_mm back out of
+    # total_clearance, which cancelled it entirely and left obstacles
+    # inflated by only their own radius + clearance, ignoring the planning
+    # robot's own footprint -- matching neither the UI's rendered obstacle
+    # boundary (`app.py`'s `_draw_planner_obstacle`) nor
+    # `_safety_clearance_radius` in `waypoint_manager.py`, and letting paths
+    # cut through obstacles.
     radii = (
         np.array(
-            [obs.radius_mm + (total_clearance - request.robot_radius_mm) for obs in request.obstacles],
+            [obs.radius_mm + total_clearance for obs in request.obstacles],
             dtype=float,
         )
         if request.obstacles
