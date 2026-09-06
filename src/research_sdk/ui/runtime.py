@@ -139,10 +139,13 @@ class ResearchRuntime:
         parallel_planning: bool = True,
         predict_motion: bool = False,
         use_reroute_gate: bool = True,
+        scene_recompute_interval_s: float = 0.02,
         command_send_hz: float = 100.0,
         command_ttl_s: float = 0.2,
     ) -> None:
         self._sender: grSimSender | None = None
+        self._network_config_mtime: float | None = None
+        self._network_config_destination: tuple[str, int] | None = None
         self._command_dispatcher = RobotCommandDispatcher(
             lambda command: self._get_sender().send_robot_command(command),
             send_hz=command_send_hz,
@@ -184,6 +187,15 @@ class ResearchRuntime:
         # planner's pre-extraction behaviour of always rerouting from scratch
         # whenever the direct line to the target isn't clear.
         self.use_reroute_gate = use_reroute_gate
+        # Same cheap-check-first philosophy as the reroute gate above, applied
+        # to the vision pipeline: rebuilding the planning scene (per-obstacle
+        # predicted-position/dynamic-radius math) on every single vision frame
+        # is wasted work between frames close enough together that nothing
+        # meaningful changed. Only actually rebuild it once this much time has
+        # passed; reuse the last one otherwise. Irrelevant while predict_motion
+        # is off, since nothing reads the scene at all in that case.
+        self.scene_recompute_interval_s = scene_recompute_interval_s
+        self._last_scene_recompute_at: float | None = None
         self.world_pipeline = VisionWorldPipeline(cameras=4)
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
@@ -204,9 +216,25 @@ class ResearchRuntime:
         scene isn't even consulted for planning in that case -- see
         ``_other_robot_obstacles`` -- so predicting into the future here
         would be wasted work), and a short 50ms look-ahead when it's on.
+
+        The scene itself is only actually rebuilt at most once per
+        ``scene_recompute_interval_s`` (20ms baseline -- vision frames arrive
+        far faster than that), and only while ``predict_motion`` is on in the
+        first place. Every other call reuses ``world_pipeline.latest_scene``
+        untouched -- cheap, matches how the reroute gate avoids redoing
+        expensive work every single frame.
         """
+        now = perf_counter()
+        compute_scene = self.predict_motion and (
+            self._last_scene_recompute_at is None
+            or now - self._last_scene_recompute_at >= self.scene_recompute_interval_s
+        )
         horizon_ms = 50.0 if self.predict_motion else 0.0
-        update = self.world_pipeline.ingest(packet, horizon_ms=horizon_ms)
+        update = self.world_pipeline.ingest(
+            packet, horizon_ms=horizon_ms, compute_scene=compute_scene
+        )
+        if compute_scene and update is not None:
+            self._last_scene_recompute_at = now
         self.last_pipeline_update = update
         return None if update is None else live_world_from_snapshot(update.snapshot)
 
@@ -652,9 +680,28 @@ class ResearchRuntime:
         return ConnectionProbe(sender.destination, (str(local_address[0]), int(local_address[1])))
 
     def _get_sender(self) -> grSimSender:
+        """Return the cached grSim command sender, rebuilding it only when
+        ``network_input.yaml`` actually changed.
+
+        This is on the command-dispatch hot path (up to ``command_send_hz``
+        per active robot -- 100/s by default), so re-reading and re-parsing
+        the YAML file on every call was a real, continuous cost for no
+        reason: the config only ever changes when someone edits it via the
+        Configurations tab. An mtime check (a cheap stat(), not a re-parse)
+        is what still lets that live edit take effect without paying full
+        file-read + YAML-parse cost on every single command.
+        """
         config_path = Path(__file__).resolve().parents[1] / "config" / "network_input.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        destination = (str(config["grsim_command_ip"]), int(config["grsim_command_port"]))
+        mtime = config_path.stat().st_mtime
+        if self._network_config_mtime != mtime:
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            self._network_config_destination = (
+                str(config["grsim_command_ip"]),
+                int(config["grsim_command_port"]),
+            )
+            self._network_config_mtime = mtime
+        destination = self._network_config_destination
+        assert destination is not None
         if self._sender is None or self._sender.destination != destination:
             if self._sender is not None:
                 self._sender.close()

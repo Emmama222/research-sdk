@@ -72,6 +72,7 @@ class VisionWorldPipeline:
         *,
         _entered_ns: int | None = None,
         horizon_ms: float | None = None,
+        compute_scene: bool = True,
     ) -> WorldPipelineUpdate | None:
         """Return an update only when all camera packets complete a frame.
 
@@ -80,6 +81,16 @@ class VisionWorldPipeline:
         ``WorldMap``'s own configured horizon, exactly as before this
         parameter existed. ``ResearchRuntime.ingest_vision_packet`` passes
         an explicit value tied to ``predict_motion`` instead.
+
+        ``compute_scene=False`` skips rebuilding the planning scene (the
+        per-obstacle predicted-position/dynamic-radius work) and reuses
+        ``self.latest_scene`` as-is -- ``world_map.update()`` (needed for the
+        snapshot/rendering path regardless) still always runs. This lets a
+        caller that's about to throttle scene recomputation (see
+        ``ResearchRuntime.ingest_vision_packet``) skip the actual cost, not
+        just discard the result -- always computes on the very first call
+        even when asked to skip, since ``latest_scene`` must never be
+        ``None`` once any frame has been processed.
         """
         entered_ns = perf_counter_ns() if _entered_ns is None else _entered_ns
         if packet is None or not packet.HasField("detection"):
@@ -99,9 +110,12 @@ class VisionWorldPipeline:
         received_at_s = time()
         mapping_started_ns = perf_counter_ns()
         self.world_map.update(snapshot, received_at_s=received_at_s)
-        scene = self.world_map.planning_scene(now_s=received_at_s, horizon_ms=horizon_ms)
+        if compute_scene or self.latest_scene is None:
+            self.latest_scene = self.world_map.planning_scene(
+                now_s=received_at_s, horizon_ms=horizon_ms
+            )
+        scene = self.latest_scene
         mapping_finished_ns = perf_counter_ns()
-        self.latest_scene = scene
         finished_ns = perf_counter_ns()
         processing_latency_ms = (finished_ns - entered_ns) / 1_000_000.0
         frame_assembly_latency_ms = (finished_ns - assembly_started_ns) / 1_000_000.0

@@ -1,5 +1,6 @@
 from typing import ClassVar
 
+import research_sdk.ui.runtime as runtime_module
 from research_sdk.config import (
     GRSIM_COMMAND_IP,
     GRSIM_COMMAND_PORT,
@@ -16,6 +17,7 @@ from research_sdk.ui.runtime import (
     waypoint_command,
 )
 from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot
+from research_sdk.world.map.world_map import WorldMap
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
 from research_sdk.world.snapshot import world_snapshot_from_frame
 
@@ -189,6 +191,77 @@ def test_ingest_vision_packet_horizon_tracks_predict_motion() -> None:
         detection.camera_id = camera_id
         runtime.ingest_vision_packet(packet)
     assert runtime.last_pipeline_update.planning_scene.prediction_horizon_ms == 50.0
+
+
+def test_scene_recompute_skipped_entirely_when_predict_motion_off(monkeypatch) -> None:
+    """The planning scene (per-obstacle predicted-position/dynamic-radius
+    math) must never be rebuilt while predict_motion is off, past the one
+    unavoidable first build -- nothing reads the scene in that case (see
+    _other_robot_obstacles), so every later frame would be pure waste."""
+    calls: list[None] = []
+    original = WorldMap.planning_scene
+
+    def counting_planning_scene(self, **kwargs):
+        calls.append(None)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(WorldMap, "planning_scene", counting_planning_scene)
+
+    packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
+    detection = packet.detection
+    detection.frame_number = 1
+    detection.t_capture = 1.0
+    detection.t_sent = 1.0
+    runtime = ResearchRuntime(predict_motion=False)
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 1, "the very first frame must still build one scene"
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 1, "predict_motion is off -- must never rebuild again"
+
+
+def test_scene_recompute_throttled_by_interval_when_predict_motion_on(monkeypatch) -> None:
+    """With predict_motion on, the scene is only actually rebuilt once per
+    scene_recompute_interval_s -- not on every vision frame -- matching the
+    reroute gate's own cheap-check-first philosophy."""
+    calls: list[None] = []
+    original = WorldMap.planning_scene
+
+    def counting_planning_scene(self, **kwargs):
+        calls.append(None)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(WorldMap, "planning_scene", counting_planning_scene)
+    fake_now = [1_000.0]
+    monkeypatch.setattr(runtime_module, "perf_counter", lambda: fake_now[0])
+
+    packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
+    detection = packet.detection
+    detection.frame_number = 1
+    detection.t_capture = 1.0
+    detection.t_sent = 1.0
+    runtime = ResearchRuntime(predict_motion=True)
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 1, "the first frame must build a scene"
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 1, "within the throttle window, must reuse the cached scene"
+
+    fake_now[0] += runtime.scene_recompute_interval_s + 0.001
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 2, "past the throttle window, must rebuild again"
 
 
 def test_waypoint_command_transforms_world_velocity_into_robot_frame() -> None:
