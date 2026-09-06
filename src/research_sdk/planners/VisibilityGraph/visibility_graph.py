@@ -110,6 +110,13 @@ RobotKey = tuple[bool, int]
 # "inside" and self-block every waypoint from ever connecting to anything.
 _BOUNDARY_EPS_MM = 1e-6
 
+# Waypoints sit exactly on their obstacle's clearance circle (see
+# `_circle_waypoints`), so a segment ending at one has its closest approach
+# to that circle's centre land exactly on the waypoint itself, at a distance
+# equal to the radius up to floating-point noise. Without this tolerance,
+# that exact boundary *touch* -- not a real intrusion -- would compare as
+# "inside" and self-block every waypoint from ever connecting to anything.
+_BOUNDARY_EPS_MM = 1e-6
 
 def _circle_waypoints(centre: Point, clearance_radius: float, sides: int) -> list[Point]:
     """Candidate waypoints spread evenly around an obstacle's clearance circle.

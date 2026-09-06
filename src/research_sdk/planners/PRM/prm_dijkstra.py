@@ -308,6 +308,11 @@ class PRMPlanner:
         periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
         **plan_kwargs,
     ) -> None:
+        # `plan()` defaults to a fixed seed (reproducible for tests/demos
+        # comparing planners); the UI wants genuine PRM behaviour -- fresh
+        # random sampling on every call -- so default to seed=None here
+        # unless the caller explicitly pins one.
+        plan_kwargs.setdefault("seed", None)
         self._plan_kwargs = plan_kwargs
         self.use_reroute_gate = use_reroute_gate
         self.periodic_reroute_frames = periodic_reroute_frames
