@@ -28,6 +28,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGraphicsOpacityEffect,
@@ -58,6 +59,7 @@ from research_sdk.config import (
     GOAL_DEPTH_MM,
     GOAL_WIDTH_MM,
     ROBOT_RADIUS_MM,
+    SAFE_MARGIN,
 )
 from research_sdk.network.robot_command import RobotCommand
 from research_sdk.planners.common import StepRecorder
@@ -83,6 +85,7 @@ from research_sdk.ui.session import (
     planner_debug_geometry,
 )
 from research_sdk.world.snapshot import WorldSnapshot
+from research_sdk.world.scene import PlanningObstacle
 
 
 class ExecutionFieldCanvas(QWidget):
@@ -104,6 +107,9 @@ class ExecutionFieldCanvas(QWidget):
         self.state = ExecutionState.NO_SCENARIO
         self.colliding_keys: set[tuple[bool, int]] = set()
         self.show_map_layer = True
+        self.show_static_obstacle_buffers = True
+        self.show_moving_obstacle_buffers = True
+        self.planning_obstacles: tuple[PlanningObstacle, ...] = ()
         self.debug_nodes: tuple[tuple[float, float], ...] = ()
         self.debug_edges: tuple[tuple[tuple[float, float], tuple[float, float]], ...] = ()
 
@@ -169,6 +175,7 @@ class ExecutionFieldCanvas(QWidget):
         if self.show_map_layer:
             self._draw_debug_map(painter)
         self._draw_scenario(painter)
+        self._draw_moving_obstacle_buffers(painter)
         self._draw_paths(painter)
         self._draw_robots(painter)
         if self.state in (
@@ -214,13 +221,36 @@ class ExecutionFieldCanvas(QWidget):
         self, painter: QPainter, obstacle: ScenarioObstacle
     ) -> None:
         centre = self._to_screen(obstacle.position_mm)
-        radius = obstacle.radius_mm * self._field_rect().width() / FIELD_LENGTH_MM
+        scale = self._field_rect().width() / FIELD_LENGTH_MM
+        radius = obstacle.radius_mm * scale
+        if self.show_static_obstacle_buffers:
+            buffer_radius = self._obstacle_buffer_radius_mm(obstacle) * scale
+            painter.setBrush(QColor(255, 167, 38, 35))
+            painter.setPen(QPen(QColor(255, 202, 40, 220), 2, Qt.DashLine))
+            painter.drawEllipse(centre, buffer_radius, buffer_radius)
         painter.setBrush(QColor(220, 70, 70, 180))
         painter.setPen(QPen(QColor("#ff8a80"), 2))
         painter.drawEllipse(centre, radius, radius)
         painter.drawLine(centre + QPointF(-radius, -radius), centre + QPointF(radius, radius))
         painter.drawLine(centre + QPointF(-radius, radius), centre + QPointF(radius, -radius))
         painter.drawText(centre + QPointF(-8, -radius - 5), f"O{obstacle.obstacle_id}")
+
+    @staticmethod
+    def _obstacle_buffer_radius_mm(obstacle: ScenarioObstacle) -> float:
+        """Mirror ``Obstacle.safe_radius`` for a static scenario obstacle."""
+        return obstacle.radius_mm + SAFE_MARGIN
+
+    def _draw_moving_obstacle_buffers(self, painter: QPainter) -> None:
+        """Draw the predicted circles already supplied to every planner."""
+        if not self.show_moving_obstacle_buffers:
+            return
+        scale = self._field_rect().width() / FIELD_LENGTH_MM
+        painter.setBrush(QColor(171, 71, 188, 30))
+        painter.setPen(QPen(QColor(206, 147, 216, 210), 2, Qt.DashLine))
+        for obstacle in self.planning_obstacles:
+            centre = self._to_screen(obstacle.pos_mm)
+            radius = obstacle.radius_mm * scale
+            painter.drawEllipse(centre, radius, radius)
 
     def _draw_scenario_robot(self, painter: QPainter, robot: ScenarioRobot) -> None:
         start = self._to_screen(robot.start_mm)
@@ -375,6 +405,14 @@ class ExecutionConsolePage(QWidget):
         self._motion_test_started_at: float | None = None
         self._motion_test_samples = 0
         self._last_snapshot_received_at: float | None = None
+        self._replan_frame_counter = 0
+        # Vision frames arrive far faster than it's safe to call a planner:
+        # with the reroute gate off (or a genuinely obstacle-blocked path for
+        # a slow planner like PRM/VisibilityGraph), every single call can be
+        # a full expensive rebuild. Only actually check every Nth frame so a
+        # slow planner can never peg the UI thread, independent of the
+        # gate's own decision.
+        self._replan_every_n_frames = 5
         self._toast_animation: QPropertyAnimation | None = None
         self.execution_timer = QTimer(self)
         self.execution_timer.setInterval(50)
@@ -482,6 +520,26 @@ class ExecutionConsolePage(QWidget):
             first_radio.blockSignals(True)
             first_radio.setChecked(True)
             first_radio.blockSignals(False)
+        gate_row = QWidget()
+        gate_layout = QHBoxLayout(gate_row)
+        gate_layout.setContentsMargins(0, 0, 0, 0)
+        self.reroute_gate_checkbox = QCheckBox("Reroute gate")
+        self.reroute_gate_checkbox.setChecked(self.runtime.use_reroute_gate)
+        self.reroute_gate_checkbox.setToolTip(
+            "On: gate a full reroute behind a cheap is-path-still-clear check.\n"
+            "Off: every plan/replan always reruns the full planner, even on an\n"
+            "unchanged scene. Takes effect on the next Load/Run."
+        )
+        self.predict_motion_checkbox = QCheckBox("Predict motion")
+        self.predict_motion_checkbox.setChecked(self.runtime.predict_motion)
+        self.predict_motion_checkbox.setToolTip(
+            "On: teammate/opponent obstacles use live tracked position + velocity\n"
+            "(motion-inflated radius) instead of their static scenario start position.\n"
+            "Takes effect on the next Load/Run."
+        )
+        gate_layout.addWidget(self.reroute_gate_checkbox)
+        gate_layout.addWidget(self.predict_motion_checkbox)
+        planner_layout.addWidget(gate_row)
         right_layout.addWidget(planner_group)
 
         self.results_tabs = QTabWidget()
@@ -501,11 +559,33 @@ class ExecutionConsolePage(QWidget):
         map_layout = QVBoxLayout(map_panel)
         map_layout.setContentsMargins(0, 0, 0, 0)
         map_layout.setSpacing(4)
+        map_controls = QHBoxLayout()
         self.map_layer_toggle = QToolButton()
-        self.map_layer_toggle.setText("Map")
+        self.map_layer_toggle.setText("Map display")
         self.map_layer_toggle.setCheckable(True)
         self.map_layer_toggle.setChecked(True)
-        map_layout.addWidget(self.map_layer_toggle, 0, Qt.AlignLeft)
+        self.map_layer_toggle.setToolTip("Show or hide the selected planner's map layer.")
+        self.static_buffers_toggle = QToolButton()
+        self.static_buffers_toggle.setText("Static buffers")
+        self.static_buffers_toggle.setCheckable(True)
+        self.static_buffers_toggle.setChecked(True)
+        self.static_buffers_toggle.setToolTip(
+            "Show the existing static obstacle safety buffer\n"
+            "(obstacle radius + configured safety margin)."
+        )
+        self.moving_buffers_toggle = QToolButton()
+        self.moving_buffers_toggle.setText("Moving buffers")
+        self.moving_buffers_toggle.setCheckable(True)
+        self.moving_buffers_toggle.setChecked(True)
+        self.moving_buffers_toggle.setToolTip(
+            "Show the existing live predicted obstacle circles\n"
+            "(predicted position + motion-inflated radius)."
+        )
+        map_controls.addWidget(self.map_layer_toggle)
+        map_controls.addWidget(self.static_buffers_toggle)
+        map_controls.addWidget(self.moving_buffers_toggle)
+        map_controls.addStretch(1)
+        map_layout.addLayout(map_controls)
         map_layout.addWidget(self.canvas, 1)
 
         self.debug_toggle = QToolButton()
@@ -573,11 +653,29 @@ class ExecutionConsolePage(QWidget):
         self.result_b_table.installEventFilter(self)
         self.debug_toggle.toggled.connect(self._toggle_debug_console)
         self.map_layer_toggle.toggled.connect(self._toggle_map_layer)
+        self.static_buffers_toggle.toggled.connect(self._toggle_static_obstacle_buffers)
+        self.moving_buffers_toggle.toggled.connect(self._toggle_moving_obstacle_buffers)
+        self.reroute_gate_checkbox.toggled.connect(self._toggle_reroute_gate)
+        self.predict_motion_checkbox.toggled.connect(self._toggle_predict_motion)
         self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
 
     def _toggle_map_layer(self, checked: bool) -> None:
         self.canvas.show_map_layer = checked
         self.canvas.update()
+
+    def _toggle_static_obstacle_buffers(self, checked: bool) -> None:
+        self.canvas.show_static_obstacle_buffers = checked
+        self.canvas.update()
+
+    def _toggle_moving_obstacle_buffers(self, checked: bool) -> None:
+        self.canvas.show_moving_obstacle_buffers = checked
+        self.canvas.update()
+
+    def _toggle_reroute_gate(self, checked: bool) -> None:
+        self.runtime.use_reroute_gate = checked
+
+    def _toggle_predict_motion(self, checked: bool) -> None:
+        self.runtime.predict_motion = checked
 
     def _toggle_debug_console(self, expanded: bool) -> None:
         self.debug_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
@@ -720,6 +818,8 @@ class ExecutionConsolePage(QWidget):
 
     def process_snapshot(self, snapshot: WorldSnapshot) -> None:
         self._last_snapshot_received_at = time.monotonic()
+        scene = self.runtime.world_pipeline.latest_scene
+        self.canvas.planning_obstacles = () if scene is None else scene.obstacles
         self.canvas.update_snapshot(snapshot)
         if self._motion_test_key is not None and snapshot.robot(*self._motion_test_key):
             self._motion_test_samples += 1
@@ -739,6 +839,41 @@ class ExecutionConsolePage(QWidget):
             elif self.verifier.timed_out:
                 self._log_debug(f"[APPLY] {self._format_apply_report(report)}", level="ERROR")
                 self._fail("Scenario apply confirmation timed out")
+        elif self.controller.state is ExecutionState.RUNNING:
+            self._replan_tick()
+
+    def _replan_tick(self) -> None:
+        """Re-check the owner planner's route against this vision frame.
+
+        Only actually runs every ``_replan_every_n_frames`` vision frames --
+        see ``ResearchRuntime.replan_active_robots`` for why most calls are
+        cheap and return nothing changed with the reroute gate on, but a
+        slow planner (PRM/VisibilityGraph) with the gate off, or a genuinely
+        blocked path, can make *every* call a full expensive rebuild; this
+        cap is what stops that from being called at the vision frame rate
+        and pegging the UI thread.
+        """
+        self._replan_frame_counter += 1
+        if self._replan_frame_counter < self._replan_every_n_frames:
+            return
+        self._replan_frame_counter = 0
+        execution_input = self.controller.execution_input
+        owner = self.controller.velocity_owner
+        if execution_input is None or owner is None:
+            return
+        try:
+            changed = self.runtime.replan_active_robots(
+                execution_input.scenario, self.runtime.live_robots
+            )
+        except Exception as exc:
+            self._log_debug(f"[REPLAN] check failed: {exc}", level="ERROR")
+            return
+        if not changed:
+            return
+        self.canvas.paths = self.runtime.active_paths
+        for key, path in changed.items():
+            team = "Y" if key[0] else "B"
+            self._log_debug(f"[REPLAN] {team}{key[1]}: rerouted ({len(path.points_mm)} waypoint(s))")
 
     def _watchdog_tick(self) -> None:
         state = self.controller.state
@@ -788,6 +923,7 @@ class ExecutionConsolePage(QWidget):
             self.runtime.set_planner(execution_input.planner_classes[planner])
             self.runtime.start_execution(paths)
             self.canvas.paths = paths
+            self._replan_frame_counter = 0
             self.current_metrics = deepcopy(self.metric_templates)
             self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
             self.run_kind = "experiment"

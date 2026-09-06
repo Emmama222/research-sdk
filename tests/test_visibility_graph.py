@@ -1,7 +1,15 @@
+from dataclasses import replace
+
 import pytest
 
 from research_sdk.planners.common import Obstacle, PlanRequest, StepRecorder
-from research_sdk.planners.VisibilityGraph.visibility_graph import plan
+from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput
+from research_sdk.planners.VisibilityGraph.visibility_graph import VisibilityGraphPlanner, plan
+from research_sdk.world.scene import PlanningObstacle, PlanningScene
+
+
+def _scene(*obstacles: PlanningObstacle) -> PlanningScene:
+    return PlanningScene(timestamp=0.0, obstacles=obstacles)
 
 
 def test_direct_path_when_clear():
@@ -137,3 +145,82 @@ def test_polygon_boundary_vertices_stay_connected():
     request = PlanRequest(start_mm=(-2000.0, 0.0), goal_mm=(2000.0, 5.0), obstacles=(obstacle,))
     result = plan(request, polygon_sides=16)
     assert result.success, "boundary-hugging path around the obstacle must exist"
+
+
+def test_planner_gate_reuses_cached_route_when_scene_is_unchanged():
+    obstacle = PlanningObstacle(robot_id=1, isYellow=False, pos_mm=(0.0, 0.0), radius_mm=200.0)
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1500.0, 0.0, 0.0),
+        target_pose=(1500.0, 0.0, 0.0),
+        clearance_mm=30.0,
+        scene=_scene(obstacle),
+    )
+    planner = VisibilityGraphPlanner()
+
+    first = planner.plan(planner_input)
+    assert first.did_reroute
+    assert first.waypoints
+
+    second = planner.plan(planner_input)
+    assert not second.did_reroute
+    assert second.waypoints == first.waypoints
+
+
+def test_planner_gate_reroutes_when_obstacle_blocks_active_segment():
+    obstacle = PlanningObstacle(robot_id=1, isYellow=False, pos_mm=(0.0, 0.0), radius_mm=200.0)
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1500.0, 0.0, 0.0),
+        target_pose=(1500.0, 0.0, 0.0),
+        clearance_mm=30.0,
+        scene=_scene(obstacle),
+    )
+    planner = VisibilityGraphPlanner()
+    first = planner.plan(planner_input)
+    assert first.waypoints
+
+    active_target = first.waypoints[0]
+    midpoint = (
+        (planner_input.current_pose[0] + active_target[0]) / 2.0,
+        (planner_input.current_pose[1] + active_target[1]) / 2.0,
+    )
+    blocking = PlanningObstacle(robot_id=2, isYellow=False, pos_mm=midpoint, radius_mm=150.0)
+    blocked_input = replace(planner_input, scene=_scene(obstacle, blocking))
+
+    second = planner.plan(blocked_input)
+    assert second.did_reroute
+
+
+def test_planner_gate_skips_graph_build_when_direct_line_clear():
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1000.0, 0.0, 0.0),
+        target_pose=(1000.0, 0.0, 0.0),
+        scene=_scene(),
+    )
+    planner = VisibilityGraphPlanner()
+
+    output = planner.plan(planner_input)
+    assert output.is_path_free
+    assert output.waypoints == ()
+    assert not output.did_reroute
+
+
+def test_planner_gate_disabled_always_calls_real_planner():
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1000.0, 0.0, 0.0),
+        target_pose=(1000.0, 0.0, 0.0),
+        scene=_scene(),
+    )
+    planner = VisibilityGraphPlanner(use_reroute_gate=False)
+
+    first = planner.plan(planner_input)
+    second = planner.plan(planner_input)
+    assert first.did_reroute
+    assert second.did_reroute  # gate disabled -- every call reroutes, matching pre-extraction behaviour

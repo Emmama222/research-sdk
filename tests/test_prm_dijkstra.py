@@ -1,5 +1,13 @@
+from dataclasses import replace
+
 from research_sdk.planners.common import Obstacle, PlanRequest
-from research_sdk.planners.PRM.prm_dijkstra import plan
+from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput
+from research_sdk.planners.PRM.prm_dijkstra import PRMPlanner, plan
+from research_sdk.world.scene import PlanningObstacle, PlanningScene
+
+
+def _scene(*obstacles: PlanningObstacle) -> PlanningScene:
+    return PlanningScene(timestamp=0.0, obstacles=obstacles)
 
 
 def test_direct_path_when_clear():
@@ -73,3 +81,82 @@ def test_fully_enclosed_goal_is_unreachable():
     # Goal is inside the obstacle itself here, so this should fail via the
     # "inside an inflated obstacle" branch, not hang searching for a path.
     assert not result.success
+
+
+def test_planner_gate_reuses_cached_route_when_scene_is_unchanged():
+    obstacle = PlanningObstacle(robot_id=1, isYellow=False, pos_mm=(0.0, 0.0), radius_mm=200.0)
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1500.0, 0.0, 0.0),
+        target_pose=(1500.0, 0.0, 0.0),
+        clearance_mm=30.0,
+        scene=_scene(obstacle),
+    )
+    planner = PRMPlanner(seed=1, num_samples=40)
+
+    first = planner.plan(planner_input)
+    assert first.did_reroute
+    assert first.waypoints
+
+    second = planner.plan(planner_input)
+    assert not second.did_reroute
+    assert second.waypoints == first.waypoints
+
+
+def test_planner_gate_reroutes_when_obstacle_blocks_active_segment():
+    obstacle = PlanningObstacle(robot_id=1, isYellow=False, pos_mm=(0.0, 0.0), radius_mm=200.0)
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1500.0, 0.0, 0.0),
+        target_pose=(1500.0, 0.0, 0.0),
+        clearance_mm=30.0,
+        scene=_scene(obstacle),
+    )
+    planner = PRMPlanner(seed=1, num_samples=40)
+    first = planner.plan(planner_input)
+    assert first.waypoints
+
+    active_target = first.waypoints[0]
+    midpoint = (
+        (planner_input.current_pose[0] + active_target[0]) / 2.0,
+        (planner_input.current_pose[1] + active_target[1]) / 2.0,
+    )
+    blocking = PlanningObstacle(robot_id=2, isYellow=False, pos_mm=midpoint, radius_mm=150.0)
+    blocked_input = replace(planner_input, scene=_scene(obstacle, blocking))
+
+    second = planner.plan(blocked_input)
+    assert second.did_reroute
+
+
+def test_planner_gate_skips_sampling_when_direct_line_clear():
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1000.0, 0.0, 0.0),
+        target_pose=(1000.0, 0.0, 0.0),
+        scene=_scene(),
+    )
+    planner = PRMPlanner(seed=1)
+
+    output = planner.plan(planner_input)
+    assert output.is_path_free
+    assert output.waypoints == ()
+    assert not output.did_reroute
+
+
+def test_planner_gate_disabled_always_calls_real_planner():
+    planner_input = PlannerInput(
+        robot_id=1,
+        is_yellow=True,
+        current_pose=(-1000.0, 0.0, 0.0),
+        target_pose=(1000.0, 0.0, 0.0),
+        scene=_scene(),
+    )
+    planner = PRMPlanner(use_reroute_gate=False, seed=1)
+
+    first = planner.plan(planner_input)
+    second = planner.plan(planner_input)
+    assert first.did_reroute
+    assert second.did_reroute  # gate disabled -- every call reroutes, matching pre-extraction behaviour
