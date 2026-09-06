@@ -160,6 +160,37 @@ def test_runtime_execution_reads_robots_from_world_snapshot() -> None:
     assert live.orientation_rad == 0.5
 
 
+def test_ingest_vision_packet_horizon_tracks_predict_motion() -> None:
+    """predict_motion=False must not predict into the future at all (a live
+    scene isn't even consulted for planning in that case, see
+    _other_robot_obstacles) -- predict_motion=True gets a short look-ahead."""
+    packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
+    detection = packet.detection
+    detection.frame_number = 1
+    detection.t_capture = 1.0
+    detection.t_sent = 1.0
+    robot = detection.robots_blue.add()
+    robot.confidence = 1.0
+    robot.robot_id = 2
+    robot.x = 5.0
+    robot.y = 6.0
+    robot.orientation = 0.5
+    robot.pixel_x = 0.0
+    robot.pixel_y = 0.0
+    runtime = ResearchRuntime(predict_motion=False)
+
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert runtime.last_pipeline_update.planning_scene.prediction_horizon_ms == 0.0
+
+    runtime.predict_motion = True
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert runtime.last_pipeline_update.planning_scene.prediction_horizon_ms == 50.0
+
+
 def test_waypoint_command_transforms_world_velocity_into_robot_frame() -> None:
     robot = LiveRobot(
         robot_id=5,

@@ -376,6 +376,14 @@ class ExecutionConsolePage(QWidget):
         self._motion_test_started_at: float | None = None
         self._motion_test_samples = 0
         self._last_snapshot_received_at: float | None = None
+        self._last_replan_check_at: float | None = None
+        # Vision frames can arrive far faster (60-100Hz) than it's safe to
+        # call a planner: with the reroute gate off (or a genuinely
+        # obstacle-blocked path for a slow planner like PRM/VisibilityGraph),
+        # every single call can be a full expensive rebuild. Cap how often
+        # _replan_tick actually invokes the planner so a slow planner can
+        # never peg the UI thread, independent of the gate's own decision.
+        self._replan_check_interval_s = 0.2
         self._toast_animation: QPropertyAnimation | None = None
         self.execution_timer = QTimer(self)
         self.execution_timer.setInterval(50)
@@ -774,10 +782,22 @@ class ExecutionConsolePage(QWidget):
     def _replan_tick(self) -> None:
         """Re-check the owner planner's route against this vision frame.
 
-        Runs once per grSim vision frame (not the 50ms execution tick) --
-        see ``ResearchRuntime.replan_active_robots`` for why most calls are
-        cheap and return nothing changed.
+        Runs at most once per ``_replan_check_interval_s`` (vision frames
+        arrive far faster than that) -- see ``ResearchRuntime
+        .replan_active_robots`` for why most calls are cheap and return
+        nothing changed with the reroute gate on, but a slow planner
+        (PRM/VisibilityGraph) with the gate off, or a genuinely blocked path,
+        can make *every* call a full expensive rebuild; this cap is what
+        stops that from being called at the vision frame rate and pegging
+        the UI thread.
         """
+        now = time.monotonic()
+        if (
+            self._last_replan_check_at is not None
+            and now - self._last_replan_check_at < self._replan_check_interval_s
+        ):
+            return
+        self._last_replan_check_at = now
         execution_input = self.controller.execution_input
         owner = self.controller.velocity_owner
         if execution_input is None or owner is None:
@@ -844,6 +864,7 @@ class ExecutionConsolePage(QWidget):
             self.runtime.set_planner(execution_input.planner_classes[planner])
             self.runtime.start_execution(paths)
             self.canvas.paths = paths
+            self._last_replan_check_at = None
             self.current_metrics = deepcopy(self.metric_templates)
             self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
             self.run_kind = "experiment"

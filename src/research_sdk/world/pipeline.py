@@ -66,8 +66,21 @@ class VisionWorldPipeline:
         self.latest_scene: PlanningScene | None = None
         self._frame_started_ns: int | None = None
 
-    def ingest(self, packet, *, _entered_ns: int | None = None) -> WorldPipelineUpdate | None:
-        """Return an update only when all camera packets complete a frame."""
+    def ingest(
+        self,
+        packet,
+        *,
+        _entered_ns: int | None = None,
+        horizon_ms: float | None = None,
+    ) -> WorldPipelineUpdate | None:
+        """Return an update only when all camera packets complete a frame.
+
+        ``horizon_ms`` overrides the prediction horizon baked into the
+        planning scene for this frame -- ``None`` (the default) keeps
+        ``WorldMap``'s own configured horizon, exactly as before this
+        parameter existed. ``ResearchRuntime.ingest_vision_packet`` passes
+        an explicit value tied to ``predict_motion`` instead.
+        """
         entered_ns = perf_counter_ns() if _entered_ns is None else _entered_ns
         if packet is None or not packet.HasField("detection"):
             return None
@@ -86,7 +99,7 @@ class VisionWorldPipeline:
         received_at_s = time()
         mapping_started_ns = perf_counter_ns()
         self.world_map.update(snapshot, received_at_s=received_at_s)
-        scene = self.world_map.planning_scene(now_s=received_at_s)
+        scene = self.world_map.planning_scene(now_s=received_at_s, horizon_ms=horizon_ms)
         mapping_finished_ns = perf_counter_ns()
         self.latest_scene = scene
         finished_ns = perf_counter_ns()

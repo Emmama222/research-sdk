@@ -197,8 +197,16 @@ class ResearchRuntime:
         ] = ()
 
     def ingest_vision_packet(self, packet) -> LiveWorldFrame | None:
-        """Update the runtime's world-state boundary from one vision packet."""
-        update = self.world_pipeline.ingest(packet)
+        """Update the runtime's world-state boundary from one vision packet.
+
+        The planning scene's prediction horizon tracks ``predict_motion``
+        directly: no horizon at all when motion prediction is off (a live
+        scene isn't even consulted for planning in that case -- see
+        ``_other_robot_obstacles`` -- so predicting into the future here
+        would be wasted work), and a short 50ms look-ahead when it's on.
+        """
+        horizon_ms = 50.0 if self.predict_motion else 0.0
+        update = self.world_pipeline.ingest(packet, horizon_ms=horizon_ms)
         self.last_pipeline_update = update
         return None if update is None else live_world_from_snapshot(update.snapshot)
 

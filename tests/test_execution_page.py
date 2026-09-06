@@ -375,10 +375,17 @@ def test_replan_tick_swaps_path_and_logs_when_owner_reroutes(monkeypatch, tmp_pa
     page.canvas.paths = paths
     assert page.controller.state is ExecutionState.RUNNING
 
+    fake_now = [1_000.0]
+    monkeypatch.setattr(page_module.time, "monotonic", lambda: fake_now[0])
+
     page.runtime.world_pipeline.store.publish(_snapshot(300.0))
     page.process_snapshot(_snapshot(300.0))
     assert page.canvas.paths == paths, "first call reports did_reroute=False -- nothing should change"
 
+    # The replan check is throttled (vision frames arrive far faster than
+    # it's safe to call a planner) -- advance the clock past the throttle
+    # window so the second check is not silently skipped.
+    fake_now[0] += page._replan_check_interval_s + 0.01
     page.process_snapshot(_snapshot(300.0))
     assert page.canvas.paths != paths
     assert page.canvas.paths[0].points_mm == ((300.0, 0.0), (500.0, 200.0), (1000.0, 0.0))
@@ -409,4 +416,40 @@ def test_replan_tick_does_nothing_while_paused(monkeypatch, tmp_path) -> None:
 
     assert _ReroutingPlanner.calls == 0, "paused execution must not call the planner again"
     assert page.canvas.paths == paths
+    page.shutdown()
+
+
+def test_replan_tick_is_throttled_within_the_check_interval(monkeypatch, tmp_path) -> None:
+    """Regression test: vision frames can arrive far faster (60-100Hz) than
+    it's safe to call a planner -- a slow planner (PRM/VisibilityGraph) with
+    an unchanged scene and the reroute gate off calls the real planner on
+    *every* invocation, so calling this at the raw vision frame rate can peg
+    the UI thread. _replan_tick must cap how often it actually calls the
+    planner, independent of anything the gate itself decides."""
+    page = _page(monkeypatch, tmp_path)
+    _ReroutingPlanner.calls = 0
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (1000.0, 0.0)))
+    page.controller.load(
+        ExecutionInput.create(_scenario(), {"Planner A": (path,)}, {"Planner A": _ReroutingPlanner})
+    )
+    page.canvas.set_scenario(_scenario())
+    page.controller.begin_apply()
+    page.controller.confirm_apply()
+    paths = page.controller.run("Planner A")
+    page.runtime.set_planner(_ReroutingPlanner)
+    page.runtime.start_execution(paths)
+    page.canvas.paths = paths
+
+    fake_now = [1_000.0]
+    monkeypatch.setattr(page_module.time, "monotonic", lambda: fake_now[0])
+    page.runtime.world_pipeline.store.publish(_snapshot(300.0))
+
+    for _ in range(20):
+        page.process_snapshot(_snapshot(300.0))
+
+    assert _ReroutingPlanner.calls == 1, "20 calls within one throttle window must reach the planner once"
+
+    fake_now[0] += page._replan_check_interval_s + 0.01
+    page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 2, "a check after the throttle window must reach the planner again"
     page.shutdown()
