@@ -192,10 +192,12 @@ class ResearchRuntime:
         # predicted-position/dynamic-radius math) on every single vision frame
         # is wasted work between frames close enough together that nothing
         # meaningful changed. Only actually rebuild it once this much time has
-        # passed; reuse the last one otherwise. Irrelevant while predict_motion
-        # is off, since nothing reads the scene at all in that case.
+        # passed; reuse the last one otherwise. The UI also renders this scene,
+        # so it must keep refreshing even while motion prediction is disabled;
+        # in that mode it is rebuilt with a zero prediction horizon.
         self.scene_recompute_interval_s = scene_recompute_interval_s
         self._last_scene_recompute_at: float | None = None
+        self._last_scene_predict_motion: bool | None = None
         self.world_pipeline = VisionWorldPipeline(cameras=4)
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
@@ -219,14 +221,14 @@ class ResearchRuntime:
 
         The scene itself is only actually rebuilt at most once per
         ``scene_recompute_interval_s`` (20ms baseline -- vision frames arrive
-        far faster than that), and only while ``predict_motion`` is on in the
-        first place. Every other call reuses ``world_pipeline.latest_scene``
-        untouched -- cheap, matches how the reroute gate avoids redoing
-        expensive work every single frame.
+        far faster than that). This applies in both modes because the UI
+        renders the latest scene even when planning does not consume it.
+        Every other call reuses ``world_pipeline.latest_scene`` untouched.
         """
         now = perf_counter()
-        compute_scene = self.predict_motion and (
+        compute_scene = (
             self._last_scene_recompute_at is None
+            or self._last_scene_predict_motion is not self.predict_motion
             or now - self._last_scene_recompute_at >= self.scene_recompute_interval_s
         )
         horizon_ms = 50.0 if self.predict_motion else 0.0
@@ -235,6 +237,7 @@ class ResearchRuntime:
         )
         if compute_scene and update is not None:
             self._last_scene_recompute_at = now
+            self._last_scene_predict_motion = self.predict_motion
         self.last_pipeline_update = update
         return None if update is None else live_world_from_snapshot(update.snapshot)
 

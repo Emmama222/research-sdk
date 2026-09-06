@@ -193,11 +193,9 @@ def test_ingest_vision_packet_horizon_tracks_predict_motion() -> None:
     assert runtime.last_pipeline_update.planning_scene.prediction_horizon_ms == 50.0
 
 
-def test_scene_recompute_skipped_entirely_when_predict_motion_off(monkeypatch) -> None:
-    """The planning scene (per-obstacle predicted-position/dynamic-radius
-    math) must never be rebuilt while predict_motion is off, past the one
-    unavoidable first build -- nothing reads the scene in that case (see
-    _other_robot_obstacles), so every later frame would be pure waste."""
+def test_scene_recompute_throttled_by_interval_when_predict_motion_off(monkeypatch) -> None:
+    """The UI reads the planning scene even with prediction disabled, so the
+    zero-horizon scene must refresh after the 20 ms throttle interval."""
     calls: list[None] = []
     original = WorldMap.planning_scene
 
@@ -206,6 +204,8 @@ def test_scene_recompute_skipped_entirely_when_predict_motion_off(monkeypatch) -
         return original(self, **kwargs)
 
     monkeypatch.setattr(WorldMap, "planning_scene", counting_planning_scene)
+    fake_now = [1_000.0]
+    monkeypatch.setattr(runtime_module, "perf_counter", lambda: fake_now[0])
 
     packet = ssl_vision_wrapper_pb2.SSL_WrapperPacket()
     detection = packet.detection
@@ -222,7 +222,13 @@ def test_scene_recompute_skipped_entirely_when_predict_motion_off(monkeypatch) -
     for camera_id in range(4):
         detection.camera_id = camera_id
         runtime.ingest_vision_packet(packet)
-    assert len(calls) == 1, "predict_motion is off -- must never rebuild again"
+    assert len(calls) == 1, "within the throttle window, must reuse the cached scene"
+
+    fake_now[0] += runtime.scene_recompute_interval_s + 0.001
+    for camera_id in range(4):
+        detection.camera_id = camera_id
+        runtime.ingest_vision_packet(packet)
+    assert len(calls) == 2, "past the throttle window, must rebuild for the UI"
 
 
 def test_scene_recompute_throttled_by_interval_when_predict_motion_on(monkeypatch) -> None:
