@@ -17,6 +17,13 @@ from time import perf_counter, process_time
 
 import research_sdk.planners as planner_package
 from research_sdk.config import ROBOT_RADIUS_MM
+from research_sdk.planners.common import StepRecorder
+from research_sdk.ui.scenarios import ScenarioObstacle
+from research_sdk.world.map.voronoi.voronoi_generator import generate_bounded_voronoi_map
+from research_sdk.world.scene import PlanningObstacle
+
+Point = tuple[float, float]
+Edge = tuple[Point, Point]
 
 
 class SessionState(str, Enum):
@@ -86,6 +93,49 @@ def discover_planners() -> dict[str, type]:
                 continue
             found[f"{name} ({module_info.name.rsplit('.', 1)[-1]})"] = candidate
     return dict(sorted(found.items()))
+
+
+def planner_debug_geometry(
+    label: str,
+    recorder: StepRecorder,
+    obstacles: tuple[ScenarioObstacle, ...],
+) -> tuple[tuple[Point, ...], tuple[Edge, ...]]:
+    """Return the sampled nodes/edges behind one planner's last ``plan()`` call.
+
+    Shared by the Scenario Planner's offline preview and the Execution
+    Console's "Map" layer toggle so both draw the same debug graph. Voronoi
+    has no ``StepRecorder`` sample/edge steps of its own -- its graph is
+    rebuilt directly from ``generate_bounded_voronoi_map`` instead.
+    """
+    nodes: list[Point] = []
+    edges: list[Edge] = []
+    for step in recorder.steps:
+        if step["kind"] == "sample" and step.get("free"):
+            nodes.append(tuple(step["point"]))
+        elif step["kind"] == "edge_test" and step.get("accepted"):
+            first = tuple(step["a"])
+            second = tuple(step["b"])
+            edges.append((first, second))
+            nodes.extend((first, second))
+    if "Voronoi" in label:
+        planning_obstacles = tuple(
+            PlanningObstacle(
+                robot_id=obstacle.obstacle_id,
+                isYellow=obstacle.is_yellow,
+                pos_mm=obstacle.position_mm,
+                radius_mm=obstacle.radius_mm,
+            )
+            for obstacle in obstacles
+        )
+        voronoi_map = generate_bounded_voronoi_map(obstacles=planning_obstacles)
+        by_id = {node.id: (node.x, node.y) for node in voronoi_map.nodes}
+        nodes = list(by_id.values())
+        edges = [
+            (by_id[edge.start_id], by_id[edge.end_id])
+            for edge in voronoi_map.edges
+            if edge.start_id in by_id and edge.end_id in by_id
+        ]
+    return tuple(dict.fromkeys(nodes)), tuple(edges)
 
 
 RESULT_COLUMNS_A = (

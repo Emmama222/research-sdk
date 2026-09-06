@@ -6,16 +6,11 @@ from dataclasses import dataclass
 from math import hypot
 from typing import Iterable
 
-from research_sdk.planners.common import StepRecorder
-from research_sdk.planners.Dijkstra.voronoi_dijkstra import (
-    PlannerState,
-    VoronoiDijkstraPlanner,
-)
 from research_sdk.config import (
-    FIELD_X_MIN,
     FIELD_X_MAX,
-    FIELD_Y_MIN,
+    FIELD_X_MIN,
     FIELD_Y_MAX,
+    FIELD_Y_MIN,
     ROBOT_RADIUS_MM,
     VORONOI_BOUNDARY_INSET_MM,
     VORONOI_DENSITY_PERCENT,
@@ -25,10 +20,21 @@ from research_sdk.config import (
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_TARGET_DEAD_ZONE_MM,
 )
+from research_sdk.planners.common import StepRecorder
+from research_sdk.planners.Dijkstra.voronoi_dijkstra import (
+    PlannerState,
+    VoronoiDijkstraPlanner,
+)
+from research_sdk.planners.reroute import (
+    DEFAULT_PERIODIC_REROUTE_FRAMES,
+    RouteState,
+    commit_reroute,
+    evaluate_route,
+    note_no_reroute,
+)
 from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.map.voronoi.voronoi_generator import VoronoiObstacle
 from research_sdk.world.scene import PlanningScene
-
 
 Point2D = tuple[float, float]
 Pose2D = tuple[float, float, float]
@@ -79,13 +85,6 @@ class TargetClearanceStatus:
     reach_clearance_overlap_mm: float = 0.0
 
 
-@dataclass(slots=True)
-class _WaypointState:
-    last_target_pose: Pose2D | None = None
-    waypoints: tuple[Pose2D, ...] = ()
-    current_waypoint_index: int = 0
-
-
 @dataclass(frozen=True, slots=True)
 class _EndpointResolution:
     target: Point2D
@@ -104,13 +103,21 @@ class VoronoiWaypointManager:
         max_density_nodes: int = VORONOI_MAX_DENSITY_NODES,
         obstacle_cost_weight: float = VORONOI_OBSTACLE_COST_WEIGHT,
         boundary_inset_mm: float = VORONOI_BOUNDARY_INSET_MM,
+        use_reroute_gate: bool = True,
+        periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
     ) -> None:
         self.horizon_ms = horizon_ms
         self.density_percent = density_percent
         self.max_density_nodes = max_density_nodes
         self.obstacle_cost_weight = obstacle_cost_weight
         self.boundary_inset_mm = boundary_inset_mm
-        self._state_by_robot: dict[RobotKey, _WaypointState] = {}
+        # Policy switch for A/B comparison: True (default) gates a full reroute
+        # behind a cheap is_path_free check (see evaluate_route in
+        # planners/reroute.py); False reproduces the pre-extraction behaviour
+        # of always rerouting whenever the direct line isn't clear.
+        self.use_reroute_gate = use_reroute_gate
+        self.periodic_reroute_frames = periodic_reroute_frames
+        self._state_by_robot: dict[RobotKey, RouteState] = {}
 
     def reset(self, robot_id: int | None = None, is_yellow: bool | None = None) -> None:
         """Clear one robot's waypoint state, or all state when no robot is given."""
@@ -122,11 +129,10 @@ class VoronoiWaypointManager:
     def update(self, planner_input: PlannerInput) -> PlannerOutput:
         """Return the active waypoint target for this control tick."""
         robot_key = (bool(planner_input.is_yellow), int(planner_input.robot_id))
-        state = self._state_by_robot.setdefault(robot_key, _WaypointState())
+        state = self._state_by_robot.setdefault(robot_key, RouteState())
 
         if planner_input.robot_reached_current_waypoint:
             state.waypoints = state.waypoints[1:]
-            state.current_waypoint_index = 0
 
         start = _pose_xy(planner_input.current_pose)
         requested_target_pose = _pose3(planner_input.target_pose)
@@ -164,42 +170,36 @@ class VoronoiWaypointManager:
         )
         target = endpoint.target
         target_pose = _with_heading(target, requested_target_pose[2])
-        active_waypoint = self._active_waypoint(state)
-        active_target = _pose_xy(active_waypoint) if active_waypoint else target
 
-        is_path_free = path_map.is_path_free(
-            start,
-            target,
-            ignore_robots=ignore_robots,
-            clearance=planner_input.clearance_mm,
-            horizon_ms=self.horizon_ms,
-        )
-        target_moved = (
-            state.last_target_pose is not None
-            and _distance(_pose_xy(state.last_target_pose), target)
-            > planner_input.reroute_target_deadzone_mm
-        )
-        active_route_blocked = (
-            active_waypoint is not None
-            and not path_map.is_path_free(
+        if self.use_reroute_gate:
+            decision = evaluate_route(
+                path_map,
                 start,
-                active_target,
+                target,
+                state,
+                ignore_robots=ignore_robots,
+                clearance_mm=planner_input.clearance_mm,
+                horizon_ms=self.horizon_ms,
+                target_deadzone_mm=planner_input.reroute_target_deadzone_mm,
+                periodic_reroute_frames=self.periodic_reroute_frames,
+            )
+            is_path_free = decision.is_path_free
+            need_reroute = decision.need_reroute
+        else:
+            # Gate disabled: reproduce the pre-extraction behaviour exactly --
+            # always reroute whenever the direct line to the target isn't clear.
+            is_path_free = path_map.is_path_free(
+                start,
+                target,
                 ignore_robots=ignore_robots,
                 clearance=planner_input.clearance_mm,
                 horizon_ms=self.horizon_ms,
             )
-        )
-        route_finished = not state.waypoints
-        need_reroute = (
-            (not is_path_free)
-            and (target_moved or route_finished or active_route_blocked)
-        )
+            need_reroute = not is_path_free
 
         did_reroute = False
         if is_path_free:
-            state.waypoints = ()
-            state.current_waypoint_index = 0
-            state.last_target_pose = target_pose
+            commit_reroute(state, (), target_pose)
             return PlannerOutput(
                 waypoints=(),
                 current_waypoint_index=0,
@@ -236,18 +236,19 @@ class VoronoiWaypointManager:
                 stay_in_field=planner_input.stay_in_field,
                 record=planner_input.record,
             )
-            state.waypoints = tuple(
+            new_waypoints = tuple(
                 _with_heading(point, target_pose[2])
                 for point in result.waypoints_mm
             )
-            state.current_waypoint_index = 0
-            state.last_target_pose = target_pose
+            commit_reroute(state, new_waypoints, target_pose)
             did_reroute = not result.reused_previous
+        else:
+            note_no_reroute(state)
 
         active = self._active_waypoint(state) or target_pose
         return PlannerOutput(
             waypoints=state.waypoints,
-            current_waypoint_index=state.current_waypoint_index,
+            current_waypoint_index=0,
             active_target_pose=active,
             is_path_free=False,
             need_reroute=need_reroute,
@@ -256,7 +257,7 @@ class VoronoiWaypointManager:
             endpoint_precision_mode=endpoint.precision_mode,
         )
 
-    def _active_waypoint(self, state: _WaypointState) -> Pose2D | None:
+    def _active_waypoint(self, state: RouteState) -> Pose2D | None:
         if state.waypoints:
             return state.waypoints[0]
         return None

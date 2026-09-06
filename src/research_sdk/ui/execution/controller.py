@@ -53,7 +53,6 @@ class ExecutionController:
     def __init__(self) -> None:
         self.state = ExecutionState.NO_SCENARIO
         self.execution_input: ExecutionInput | None = None
-        self.shadow_planners: set[str] = set()
         self.velocity_owner: str | None = None
         self.selections_locked = False
         self.error_message = ""
@@ -62,7 +61,6 @@ class ExecutionController:
     def load(self, execution_input: ExecutionInput) -> None:
         self._require_not_running("load a scenario")
         self.execution_input = execution_input
-        self.shadow_planners.clear()
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
@@ -72,7 +70,6 @@ class ExecutionController:
     def unload(self) -> None:
         self._require_not_running("unload a scenario")
         self.execution_input = None
-        self.shadow_planners.clear()
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
@@ -94,16 +91,6 @@ class ExecutionController:
         self.error_message = message
         self.state = ExecutionState.ERROR
 
-    def set_shadow(self, planner: str, enabled: bool) -> None:
-        self._require(ExecutionState.READY)
-        if self.selections_locked:
-            raise RuntimeError("Planner selections are locked until Reset E-Stop")
-        self._require_planner(planner)
-        if enabled:
-            self.shadow_planners.add(planner)
-        else:
-            self.shadow_planners.discard(planner)
-
     def run(self, planner: str) -> tuple[PlannedRobotPath, ...]:
         self._require(ExecutionState.READY)
         self._require_planner(planner)
@@ -114,7 +101,6 @@ class ExecutionController:
         if not paths:
             raise RuntimeError(f"{planner} has no executable path")
         self.velocity_owner = planner
-        self.shadow_planners.discard(planner)
         self.selections_locked = True
         self.state = ExecutionState.RUNNING
         return paths
@@ -144,7 +130,6 @@ class ExecutionController:
         if self.state is ExecutionState.NO_SCENARIO:
             raise RuntimeError("No scenario is loaded")
         self.state = ExecutionState.RESETTING
-        self.shadow_planners.clear()
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
@@ -154,7 +139,6 @@ class ExecutionController:
             self.state = ExecutionState.NO_SCENARIO
         else:
             self.state = ExecutionState.SCENARIO_LOADED
-        self.shadow_planners.clear()
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
