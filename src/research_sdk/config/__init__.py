@@ -36,6 +36,10 @@ _PLANNER_KEYS = {
     "voronoi_endpoint_reach_mm",
     "voronoi_escape_margin_mm",
     "voronoi_min_escape_step_mm",
+    "visibility_polygon_sides",
+    "prm_num_samples",
+    "prm_k_neighbours",
+    "prm_max_resample_attempts",
 }
 
 _NETWORK_KEYS = {
@@ -119,6 +123,10 @@ for _integer_key in (
     "voronoi_render_max_density_nodes",
     "voronoi_horizon_ms",
     "voronoi_connection_count",
+    "visibility_polygon_sides",
+    "prm_num_samples",
+    "prm_k_neighbours",
+    "prm_max_resample_attempts",
 ):
     if not isinstance(PLANNER_VARIABLES[_integer_key], int):
         raise ValueError(f"{_integer_key} must be an integer")

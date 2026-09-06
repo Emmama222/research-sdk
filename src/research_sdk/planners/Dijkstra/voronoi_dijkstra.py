@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from heapq import heappop, heappush
 from math import hypot
 from typing import Iterable
+
+import networkx as nx
 
 from research_sdk.config import (
     DEFENCE_X_MM,
@@ -28,6 +29,7 @@ from research_sdk.config import (
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_TARGET_DEAD_ZONE_MM,
 )
+from research_sdk.planners.common import StepRecorder
 from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.map.voronoi.voronoi_generator import (
     VoronoiObstacle,
@@ -95,6 +97,8 @@ class VoronoiDijkstraPlanner:
         ignore_robots: set[RobotKey] | None = None,
         previous_state: PlannerState | None = None,
         stay_in_field: bool = True,
+        skip_direct_path: bool = False,
+        record: StepRecorder | None = None,
     ) -> PlanResult:
         """Return waypoints from *start_pos_mm* toward *target_pos_mm*.
 
@@ -102,6 +106,31 @@ class VoronoiDijkstraPlanner:
         field and all returned waypoints are validated to stay within it.
         Set to False to allow planning toward out-of-field targets (e.g. the
         ball rolling out of bounds) while still being aware of the goal posts.
+
+        *skip_direct_path*, when True, forces the full Voronoi-map build even
+        when start and target see each other directly -- for planner
+        comparisons that want every call measuring the algorithm's actual
+        map-generation cost, matching ``visibility_graph.plan()`` and
+        ``prm_dijkstra.plan()``'s own ``skip_direct_path``. Leave it False
+        (the default) for normal/production planning, where taking the free
+        direct path is exactly the right thing to do. Does not affect the
+        escape-waypoint or reused-previous-path shortcuts below, which are
+        different mechanisms from the direct-line-of-sight check.
+
+        *record*, if given a
+        :class:`~research_sdk.planners.common.StepRecorder`, gets a coarse
+        map-vs-search split: one ``"map"`` event bracketing the Voronoi map
+        build (``generate_voronoi_map_from_scene`` plus splicing start/target
+        into the graph) and one ``"path"`` event when the Dijkstra search
+        finishes. This is coarser than ``visibility_graph.py``/
+        ``prm_dijkstra.py``'s per-edge/per-sample logging (those log every
+        candidate tested; this logs only phase boundaries), because map
+        generation here happens inside a separate module
+        (``voronoi_generator.py``) that doesn't accept a recorder -- adding
+        two timestamps around the existing call boundaries was enough to
+        get a real split without threading ``record`` through that module's
+        internals too. Leave it ``None`` (the default) for normal/timed
+        planning calls, matching the other two planners.
         """
         if ignore_robots is None:
             ignore_robots = set()
@@ -122,7 +151,7 @@ class VoronoiDijkstraPlanner:
         if escape_waypoint is not None:
             return PlanResult(target_mm=target, waypoints_mm=(escape_waypoint,))
 
-        if scene.is_path_free(
+        if not skip_direct_path and scene.is_path_free(
             start,
             target,
             ignore_robots=ignore_robots,
@@ -147,6 +176,8 @@ class VoronoiDijkstraPlanner:
                 reused_previous=True,
             )
 
+        if record is not None:
+            record.log("map_started")
         voronoi_map = generate_voronoi_map_from_scene(
             scene,
             now_s=now_s,
@@ -183,6 +214,9 @@ class VoronoiDijkstraPlanner:
             obstacles,
         )
 
+        if record is not None:
+            record.log("map_built", node_count=len(node_pos))
+
         if self.START_ID not in adjacency or self.TARGET_ID not in adjacency:
             return PlanResult(target_mm=target, waypoints_mm=())
 
@@ -210,6 +244,8 @@ class VoronoiDijkstraPlanner:
             return PlanResult(target_mm=target, waypoints_mm=())
 
         waypoints = (*intermediate, target)
+        if record is not None:
+            record.log("path", waypoints=waypoints, direct=False)
         return PlanResult(target_mm=target, waypoints_mm=waypoints)
 
     def _escape_waypoint_from_containing_obstacles(
@@ -355,31 +391,26 @@ class VoronoiDijkstraPlanner:
         start_id: int,
         target_id: int,
     ) -> list[int]:
-        distances = {start_id: 0.0}
-        previous: dict[int, int] = {}
-        queue = [(0.0, start_id)]
-
-        while queue:
-            cost, node_id = heappop(queue)
-            if cost > distances.get(node_id, float("inf")):
-                continue
-            if node_id == target_id:
-                break
-            for next_id, edge_cost in adjacency.get(node_id, ()):
-                next_cost = cost + edge_cost
-                if next_cost < distances.get(next_id, float("inf")):
-                    distances[next_id] = next_cost
-                    previous[next_id] = node_id
-                    heappush(queue, (next_cost, next_id))
-
-        if target_id not in distances:
+        """Shortest path over ``adjacency`` via ``networkx.dijkstra_path`` --
+        the same search VisibilityGraph and PRM already use (see
+        ``planners/VisibilityGraph/visibility_graph.py`` and
+        ``planners/PRM/prm_dijkstra.py``), so all three planners are compared
+        on identical shortest-path behaviour and only differ in how they
+        build the graph/roadmap/map handed to it. Previously a hand-rolled
+        heapq Dijkstra -- algorithmically equivalent (same textbook
+        algorithm, same non-negative edge weights), but keeping a second,
+        bespoke implementation around was an unforced source of doubt when
+        comparing path quality across planners, for no behavioural benefit.
+        """
+        graph = nx.Graph()
+        graph.add_nodes_from(adjacency)
+        for node_id, edges in adjacency.items():
+            for neighbour_id, cost in edges:
+                graph.add_edge(node_id, neighbour_id, weight=cost)
+        try:
+            return nx.dijkstra_path(graph, start_id, target_id, weight="weight")
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
             return []
-
-        path = [target_id]
-        while path[-1] != start_id:
-            path.append(previous[path[-1]])
-        path.reverse()
-        return path
 
 
 def _point2(point: tuple[float, ...] | list[float]) -> Point:

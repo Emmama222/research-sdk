@@ -42,6 +42,25 @@ def test_initial_state_is_no_scenario() -> None:
     assert ExecutionController().state is ExecutionState.NO_SCENARIO
 
 
+def test_unload_clears_loaded_execution_input_and_state() -> None:
+    controller = ExecutionController()
+    controller.load(execution_input())
+
+    controller.unload()
+
+    assert controller.state is ExecutionState.NO_SCENARIO
+    assert controller.execution_input is None
+    assert controller.velocity_owner is None
+
+
+def test_unload_is_rejected_during_execution() -> None:
+    controller = ready_controller()
+    controller.run("Planner A")
+
+    with pytest.raises(RuntimeError, match="Cannot unload"):
+        controller.unload()
+
+
 def test_run_requires_ready_and_claims_exclusive_owner() -> None:
     controller = ExecutionController()
     controller.load(execution_input())

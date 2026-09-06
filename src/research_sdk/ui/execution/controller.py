@@ -57,7 +57,6 @@ class ExecutionController:
         self.velocity_owner: str | None = None
         self.selections_locked = False
         self.error_message = ""
-        self.pending_replay = False
         self.pending_checkpoint_id: str | None = None
 
     def load(self, execution_input: ExecutionInput) -> None:
@@ -67,9 +66,18 @@ class ExecutionController:
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
-        self.pending_replay = False
         self.pending_checkpoint_id = None
         self.state = ExecutionState.SCENARIO_LOADED
+
+    def unload(self) -> None:
+        self._require_not_running("unload a scenario")
+        self.execution_input = None
+        self.shadow_planners.clear()
+        self.velocity_owner = None
+        self.selections_locked = False
+        self.error_message = ""
+        self.pending_checkpoint_id = None
+        self.state = ExecutionState.NO_SCENARIO
 
     def begin_apply(self) -> None:
         self._require(ExecutionState.SCENARIO_LOADED)
@@ -150,18 +158,6 @@ class ExecutionController:
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
-
-    def request_start_replay(self) -> str:
-        if self.state not in (
-            ExecutionState.COMPLETED,
-            ExecutionState.STOPPED,
-            ExecutionState.ERROR,
-        ):
-            raise RuntimeError(f"Cannot replay from {self.state.value}")
-        if self.velocity_owner is None:
-            raise RuntimeError("No previous velocity owner is available")
-        self.pending_replay = True
-        return self.velocity_owner
 
     def request_checkpoint_resume(self, checkpoint_id: str) -> None:
         if self.state not in (

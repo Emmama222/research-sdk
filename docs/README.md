@@ -1,6 +1,7 @@
 # Docs
 
 
+- [current.md](current.md) — living snapshot of the planners, runtime policy flags, and comparison tooling as they stand today
 - [architecture.md](architecture.md) — module map and how a request flows through the system
 - [adaptors.md](adaptors.md) — the adaptor contract and how to add a new one
 - [mcp.md](mcp.md) — what's exposed over MCP, and why not everything is

@@ -104,7 +104,12 @@ def test_target_tool_is_guarded_without_starting_robot(planner_page) -> None:
     assert not page.tool_buttons["target_pos"].isEnabled()
 
 
-def test_preview_plans_all_algorithms_without_starting_execution(planner_page) -> None:
+def test_preview_plans_selected_algorithm_only_without_starting_execution(planner_page) -> None:
+    """"Plan" only runs the currently-selected planner, not every planner in
+    the dropdown -- running all of them back-to-back fought the execution
+    model's single ``velocity_owner`` assumption once tried against a live
+    grSim connection. A 3-way comparison still exists, offline and
+    grSim-free: ``scripts/demo_planners.py``."""
     page = planner_page
     page.scenario = Scenario(
         "preview",
@@ -112,12 +117,21 @@ def test_preview_plans_all_algorithms_without_starting_execution(planner_page) -
         obstacles=[ScenarioObstacle(2, False, (0.0, 800.0), 90.0)],
     )
     page._install_scenario("ready")
+    assert page.planner_selector.count() == 3
 
     page._plan()
 
-    assert len(page.previews) == page.planner_selector.count() == 3
+    assert len(page.previews) == 1
+    selected_label = page.planner_selector.currentText()
+    assert set(page.previews) == {selected_label}
     assert page.runtime.active_paths == ()
-    assert all(preview.map_time_ms >= 0.0 for preview in page.previews.values())
+    # map_time_ms is None for planners with no StepRecorder support
+    # (VoronoiDijkstraPlanner) -- not a fabricated split, see _plan()'s
+    # comment on why. planning_time_ms is always a real, non-negative total.
+    assert all(
+        preview.map_time_ms is None or preview.map_time_ms >= 0.0
+        for preview in page.previews.values()
+    )
     assert all(preview.planning_time_ms >= 0.0 for preview in page.previews.values())
 
     map_text = page.map_time.text()
@@ -126,5 +140,70 @@ def test_preview_plans_all_algorithms_without_starting_execution(planner_page) -
     assert page.canvas.paths == ()
     assert page.map_time.text() == map_text
     assert page.plan_time.text() == plan_text
+
+
+def _select_voronoi(page) -> None:
+    voronoi_index = next(
+        i
+        for i in range(page.planner_selector.count())
+        if "Voronoi" in page.planner_selector.itemText(i)
+    )
+    page.planner_selector.setCurrentIndex(voronoi_index)
+
+
+def test_voronoi_preview_shows_honest_total_when_shortcut_taken(planner_page) -> None:
+    """When a call takes the direct-line-of-sight shortcut, no map gets
+    built and there's genuinely nothing to split -- true for all three
+    planners, not just Voronoi. The UI used to fake a split for Voronoi
+    specifically by timing a *separate*, cheaper debug-only map build and
+    subtracting it from the real total -- which dumped almost the entire
+    real map-generation cost into "Plan" whenever Voronoi *did* build a map,
+    making it look search-bound when it isn't (see docs/decisions/0005-
+    parallel-planner-execution.md, decision 6: swapping its search
+    implementation changed nothing). It now shows "Map: n/a" and the honest
+    total under "Plan" instead of a fabricated subtraction."""
+    page = planner_page
+    page.scenario = Scenario(
+        "preview",
+        robots=[ScenarioRobot(1, True, (-1000.0, 0.0), (1000.0, 0.0))],
+        obstacles=[ScenarioObstacle(2, False, (0.0, 800.0), 90.0)],
+    )
+    page._install_scenario("ready")
+    _select_voronoi(page)
+
+    page._plan()
+
+    label = page.planner_selector.currentText()
+    preview = page.previews[label]
+    assert preview.map_time_ms is None
+    assert preview.planning_time_ms >= 0.0
+    assert page.map_time.text() == "Map: n/a (shortcut taken, no full build)"
+    assert page.plan_time.text() == f"Plan (total): {preview.planning_time_ms:.3f} ms"
     page.planner_selector.setCurrentIndex(1)
     assert page.canvas.paths == ()
+
+
+def test_voronoi_preview_shows_real_map_search_split_on_full_build(planner_page) -> None:
+    """VoronoiDijkstraPlanner now supports StepRecorder (a coarser two-
+    timestamp split than VisibilityGraph/PRM's per-step logging, see
+    voronoi_dijkstra.py's plan() docstring) -- when a call is actually
+    blocked and has to build the Voronoi map, the UI shows a real map/search
+    split for it too, not just "Map: n/a"."""
+    page = planner_page
+    page.scenario = Scenario(
+        "preview",
+        robots=[ScenarioRobot(1, True, (-1500.0, 0.0), (1500.0, 0.0))],
+        obstacles=[ScenarioObstacle(2, False, (0.0, 0.0), 200.0)],
+    )
+    page._install_scenario("ready")
+    _select_voronoi(page)
+
+    page._plan()
+
+    label = page.planner_selector.currentText()
+    preview = page.previews[label]
+    assert preview.map_time_ms is not None
+    assert preview.map_time_ms >= 0.0
+    assert preview.planning_time_ms >= 0.0
+    assert page.map_time.text() == f"Map: {preview.map_time_ms:.3f} ms"
+    assert page.plan_time.text() == f"Plan (search only): {preview.planning_time_ms:.3f} ms"
