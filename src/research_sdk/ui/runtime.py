@@ -188,6 +188,9 @@ class ResearchRuntime:
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
         self._waypoint_indices: dict[tuple[bool, int], int] = {}
+        self._patrol_paths: dict[tuple[bool, int], tuple[tuple[float, float], ...]] = {}
+        self._patrol_indices: dict[tuple[bool, int], int] = {}
+        self._patrol_directions: dict[tuple[bool, int], int] = {}
         self._paused = False
         self._step_mode = False
         self._step_boundary_indices: dict[tuple[bool, int], int] = {}
@@ -472,6 +475,7 @@ class ResearchRuntime:
         *,
         waypoint_indices: dict[tuple[bool, int], int] | None = None,
         paused: bool = False,
+        scenario: Scenario | None = None,
     ) -> None:
         self.active_paths = paths
         self._active_paths = {(path.is_yellow, path.robot_id): path for path in paths}
@@ -485,6 +489,13 @@ class ResearchRuntime:
                     self._waypoint_indices[key] = max(
                         0, min(int(index), len(self._active_paths[key].points_mm))
                     )
+        self._patrol_paths = {
+            (obstacle.is_yellow, obstacle.obstacle_id): obstacle.patrol_waypoints
+            for obstacle in (scenario.obstacles if scenario is not None else ())
+            if obstacle.patrol_waypoints
+        }
+        self._patrol_indices = {key: 0 for key in self._patrol_paths}
+        self._patrol_directions = {key: 1 for key in self._patrol_paths}
         self._paused = bool(paused)
         self._step_mode = False
         self._step_boundary_indices.clear()
@@ -537,8 +548,34 @@ class ResearchRuntime:
                 0, min(int(index), len(self._active_paths[key].points_mm))
             )
 
+    def _tick_patrols(self, live_robots: dict[tuple[bool, int], LiveRobot]) -> None:
+        """Drive each patrolling obstacle back and forth along its waypoints.
+
+        The obstacle bounces at the ends of the list (reversing direction)
+        rather than wrapping from the last waypoint back to the first -- so
+        it always retraces the same line and never needs to "jump" across
+        the field to close a loop.
+        """
+        for key, waypoints in self._patrol_paths.items():
+            robot = live_robots.get(key)
+            if robot is None or len(waypoints) <= 1:
+                continue
+            index = self._patrol_indices[key]
+            direction = self._patrol_directions[key]
+            target = waypoints[index]
+            if hypot(target[0] - robot.position_mm[0], target[1] - robot.position_mm[1]) <= 120.0:
+                if index + direction < 0 or index + direction >= len(waypoints):
+                    direction = -direction
+                    self._patrol_directions[key] = direction
+                index += direction
+                self._patrol_indices[key] = index
+                target = waypoints[index]
+            self._command_dispatcher.publish(waypoint_command(robot, target))
+
     def execute_tick(self, live_robots: dict[tuple[bool, int], LiveRobot]) -> bool:
         """Send one control tick and return True when every path has arrived."""
+        if self._patrol_paths and not (self._paused and not self._step_mode):
+            self._tick_patrols(live_robots)
         if not self._active_paths:
             return True
         self.last_waypoint_transitions = ()
@@ -606,6 +643,9 @@ class ResearchRuntime:
                 errors.append(f"{key}: {exc}")
         self._active_paths.clear()
         self._waypoint_indices.clear()
+        self._patrol_paths.clear()
+        self._patrol_indices.clear()
+        self._patrol_directions.clear()
         self.active_paths = ()
         self._paused = False
         self._step_mode = False
