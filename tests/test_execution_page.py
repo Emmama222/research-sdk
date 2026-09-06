@@ -9,10 +9,11 @@ import research_sdk.ui.execution.page as page_module
 from research_sdk.planners import PlannerOutput
 from research_sdk.ui.execution.checkpoints import CheckpointStore
 from research_sdk.ui.execution.controller import ExecutionInput, ExecutionState
-from research_sdk.ui.execution.page import ExecutionConsolePage
+from research_sdk.ui.execution.page import ExecutionConsolePage, ExecutionFieldCanvas
 from research_sdk.ui.runtime import LiveRobot, PlannedRobotPath, ResearchRuntime
-from research_sdk.ui.scenarios import Scenario, ScenarioRobot, ScenarioStore
+from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot, ScenarioStore
 from research_sdk.world.snapshot import RobotSnapshot, WorldSnapshot, empty_robot_team
+from research_sdk.world.scene import PlanningObstacle, PlanningScene
 
 
 class PlannerA:
@@ -280,6 +281,55 @@ def test_loading_scenario_installs_full_visual_model_on_execution_canvas(
     page.shutdown()
 
 
+def test_static_obstacle_zone_matches_existing_safe_radius_calculation() -> None:
+    obstacle = ScenarioObstacle(2, False, (0.0, 0.0), 90.0)
+
+    assert ExecutionFieldCanvas._obstacle_buffer_radius_mm(obstacle) == 120.0
+
+
+def test_obstacle_buffer_toggles_update_execution_canvas(monkeypatch, tmp_path) -> None:
+    page = _page(monkeypatch, tmp_path)
+
+    assert page.map_layer_toggle.isCheckable()
+    assert page.map_layer_toggle.isChecked()
+    assert page.static_buffers_toggle.isChecked()
+    assert page.moving_buffers_toggle.isChecked()
+    assert page.canvas.show_static_obstacle_buffers
+    assert page.canvas.show_moving_obstacle_buffers
+
+    page.static_buffers_toggle.click()
+
+    assert not page.canvas.show_static_obstacle_buffers
+    assert page.canvas.show_moving_obstacle_buffers
+
+    page.moving_buffers_toggle.click()
+
+    assert not page.canvas.show_moving_obstacle_buffers
+    page.shutdown()
+
+
+def test_snapshot_exposes_existing_planning_obstacles_on_canvas(monkeypatch, tmp_path) -> None:
+    page = _page(monkeypatch, tmp_path)
+    obstacle = PlanningObstacle(
+        robot_id=2,
+        isYellow=False,
+        pos_mm=(350.0, 40.0),
+        radius_mm=245.0,
+        vel_mmps=(500.0, 0.0),
+        prediction_horizon_ms=250.0,
+    )
+    page.runtime.world_pipeline.latest_scene = PlanningScene(
+        timestamp=1.0,
+        obstacles=(obstacle,),
+        prediction_horizon_ms=250.0,
+    )
+
+    page.process_snapshot(_snapshot())
+
+    assert page.canvas.planning_obstacles == (obstacle,)
+    page.shutdown()
+
+
 def test_unload_scenario_clears_execution_page_and_visual_model(
     monkeypatch, tmp_path
 ) -> None:
@@ -375,11 +425,17 @@ def test_replan_tick_swaps_path_and_logs_when_owner_reroutes(monkeypatch, tmp_pa
     page.canvas.paths = paths
     assert page.controller.state is ExecutionState.RUNNING
 
+    # The replan check only actually runs every _replan_every_n_frames vision
+    # frames -- feed exactly that many before it reaches the planner at all.
     page.runtime.world_pipeline.store.publish(_snapshot(300.0))
-    page.process_snapshot(_snapshot(300.0))
-    assert page.canvas.paths == paths, "first call reports did_reroute=False -- nothing should change"
+    for _ in range(page._replan_every_n_frames):
+        page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 1
+    assert page.canvas.paths == paths, "first replan reports did_reroute=False -- nothing should change"
 
-    page.process_snapshot(_snapshot(300.0))
+    for _ in range(page._replan_every_n_frames):
+        page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 2
     assert page.canvas.paths != paths
     assert page.canvas.paths[0].points_mm == ((300.0, 0.0), (500.0, 200.0), (1000.0, 0.0))
     assert "[REPLAN]" in page.debug_console.toPlainText()
@@ -409,4 +465,43 @@ def test_replan_tick_does_nothing_while_paused(monkeypatch, tmp_path) -> None:
 
     assert _ReroutingPlanner.calls == 0, "paused execution must not call the planner again"
     assert page.canvas.paths == paths
+    page.shutdown()
+
+
+def test_replan_tick_is_throttled_by_frame_count(monkeypatch, tmp_path) -> None:
+    """Regression test: vision frames can arrive far faster (60-100Hz) than
+    it's safe to call a planner -- a slow planner (PRM/VisibilityGraph) with
+    an unchanged scene and the reroute gate off calls the real planner on
+    *every* invocation, so calling this on every vision frame can peg the UI
+    thread. _replan_tick must only actually call the planner every
+    _replan_every_n_frames frames, independent of anything the gate itself
+    decides."""
+    page = _page(monkeypatch, tmp_path)
+    _ReroutingPlanner.calls = 0
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (1000.0, 0.0)))
+    page.controller.load(
+        ExecutionInput.create(_scenario(), {"Planner A": (path,)}, {"Planner A": _ReroutingPlanner})
+    )
+    page.canvas.set_scenario(_scenario())
+    page.controller.begin_apply()
+    page.controller.confirm_apply()
+    paths = page.controller.run("Planner A")
+    page.runtime.set_planner(_ReroutingPlanner)
+    page.runtime.start_execution(paths)
+    page.canvas.paths = paths
+    page.runtime.world_pipeline.store.publish(_snapshot(300.0))
+
+    for _ in range(page._replan_every_n_frames - 1):
+        page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 0, "fewer than N frames must not reach the planner yet"
+
+    page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 1, "the Nth frame must reach the planner"
+
+    for _ in range(page._replan_every_n_frames - 1):
+        page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 1, "the counter must have reset -- not yet N frames since the last check"
+
+    page.process_snapshot(_snapshot(300.0))
+    assert _ReroutingPlanner.calls == 2, "a full N frames after the last check must reach the planner again"
     page.shutdown()

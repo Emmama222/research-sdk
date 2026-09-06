@@ -6,6 +6,7 @@ from research_sdk.world.pipeline import (
     WorldSnapshotStore,
 )
 from research_sdk.world.scene import FieldDimensions, PlanningObstacle, PlanningScene
+from research_sdk.world.shapes import OrientedRectangle
 from research_sdk.world.snapshot import BallSnapshot, RobotSnapshot, WorldSnapshot
 
 __all__ = [
@@ -13,6 +14,7 @@ __all__ = [
     "FieldDimensions",
     "PlanningObstacle",
     "PlanningScene",
+    "OrientedRectangle",
     "RobotSnapshot",
     "VisionWorldPipeline",
     "WorldPipelineUpdate",
