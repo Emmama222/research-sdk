@@ -6,6 +6,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 import research_sdk.ui.execution.page as page_module
+from research_sdk.planners import PlannerOutput
 from research_sdk.ui.execution.checkpoints import CheckpointStore
 from research_sdk.ui.execution.controller import ExecutionInput, ExecutionState
 from research_sdk.ui.execution.page import ExecutionConsolePage
@@ -22,6 +23,30 @@ class PlannerA:
 class PlannerB:
     def __init__(self, **_kwargs) -> None:
         pass
+
+
+class _ReroutingPlanner:
+    """Fake planner whose *second* call reports a reroute -- lets
+    ``_replan_tick`` be exercised deterministically without depending on
+    real path geometry (that's what test_reroute.py/test_prm_dijkstra.py/
+    test_visibility_graph.py already cover)."""
+
+    calls = 0
+
+    def __init__(self, **_kwargs) -> None:
+        pass
+
+    def plan(self, planner_input) -> PlannerOutput:
+        type(self).calls += 1
+        did_reroute = type(self).calls == 2
+        return PlannerOutput(
+            waypoints=((500.0, 200.0, 0.0), (1000.0, 0.0, 0.0)),
+            current_waypoint_index=0,
+            active_target_pose=(1000.0, 0.0, 0.0),
+            is_path_free=False,
+            need_reroute=did_reroute,
+            did_reroute=did_reroute,
+        )
 
 
 def _application() -> QApplication:
@@ -331,4 +356,57 @@ def test_delete_selected_result_row_removes_it_from_both_result_tables(
     assert [row["run_id"] for row in page.result_rows_b] == ["run-1"]
     assert page.result_a_table.rowCount() == 1
     assert page.result_b_table.rowCount() == 1
+    page.shutdown()
+
+
+def test_replan_tick_swaps_path_and_logs_when_owner_reroutes(monkeypatch, tmp_path) -> None:
+    page = _page(monkeypatch, tmp_path)
+    _ReroutingPlanner.calls = 0
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (1000.0, 0.0)))
+    page.controller.load(
+        ExecutionInput.create(_scenario(), {"Planner A": (path,)}, {"Planner A": _ReroutingPlanner})
+    )
+    page.canvas.set_scenario(_scenario())
+    page.controller.begin_apply()
+    page.controller.confirm_apply()
+    paths = page.controller.run("Planner A")
+    page.runtime.set_planner(_ReroutingPlanner)
+    page.runtime.start_execution(paths)
+    page.canvas.paths = paths
+    assert page.controller.state is ExecutionState.RUNNING
+
+    page.runtime.world_pipeline.store.publish(_snapshot(300.0))
+    page.process_snapshot(_snapshot(300.0))
+    assert page.canvas.paths == paths, "first call reports did_reroute=False -- nothing should change"
+
+    page.process_snapshot(_snapshot(300.0))
+    assert page.canvas.paths != paths
+    assert page.canvas.paths[0].points_mm == ((300.0, 0.0), (500.0, 200.0), (1000.0, 0.0))
+    assert "[REPLAN]" in page.debug_console.toPlainText()
+    page.shutdown()
+
+
+def test_replan_tick_does_nothing_while_paused(monkeypatch, tmp_path) -> None:
+    page = _page(monkeypatch, tmp_path)
+    _ReroutingPlanner.calls = 0
+    path = PlannedRobotPath(1, True, ((0.0, 0.0), (1000.0, 0.0)))
+    page.controller.load(
+        ExecutionInput.create(_scenario(), {"Planner A": (path,)}, {"Planner A": _ReroutingPlanner})
+    )
+    page.canvas.set_scenario(_scenario())
+    page.controller.begin_apply()
+    page.controller.confirm_apply()
+    paths = page.controller.run("Planner A")
+    page.runtime.set_planner(_ReroutingPlanner)
+    page.runtime.start_execution(paths)
+    page.canvas.paths = paths
+    page.runtime.pause_execution()
+    page.controller.pause()
+
+    page.runtime.world_pipeline.store.publish(_snapshot(300.0))
+    page.process_snapshot(_snapshot(300.0))
+    page.process_snapshot(_snapshot(300.0))
+
+    assert _ReroutingPlanner.calls == 0, "paused execution must not call the planner again"
+    assert page.canvas.paths == paths
     page.shutdown()

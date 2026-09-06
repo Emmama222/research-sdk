@@ -28,6 +28,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QGraphicsOpacityEffect,
@@ -482,6 +483,26 @@ class ExecutionConsolePage(QWidget):
             first_radio.blockSignals(True)
             first_radio.setChecked(True)
             first_radio.blockSignals(False)
+        gate_row = QWidget()
+        gate_layout = QHBoxLayout(gate_row)
+        gate_layout.setContentsMargins(0, 0, 0, 0)
+        self.reroute_gate_checkbox = QCheckBox("Reroute gate")
+        self.reroute_gate_checkbox.setChecked(self.runtime.use_reroute_gate)
+        self.reroute_gate_checkbox.setToolTip(
+            "On: gate a full reroute behind a cheap is-path-still-clear check.\n"
+            "Off: every plan/replan always reruns the full planner, even on an\n"
+            "unchanged scene. Takes effect on the next Load/Run."
+        )
+        self.predict_motion_checkbox = QCheckBox("Predict motion")
+        self.predict_motion_checkbox.setChecked(self.runtime.predict_motion)
+        self.predict_motion_checkbox.setToolTip(
+            "On: teammate/opponent obstacles use live tracked position + velocity\n"
+            "(motion-inflated radius) instead of their static scenario start position.\n"
+            "Takes effect on the next Load/Run."
+        )
+        gate_layout.addWidget(self.reroute_gate_checkbox)
+        gate_layout.addWidget(self.predict_motion_checkbox)
+        planner_layout.addWidget(gate_row)
         right_layout.addWidget(planner_group)
 
         self.results_tabs = QTabWidget()
@@ -573,11 +594,19 @@ class ExecutionConsolePage(QWidget):
         self.result_b_table.installEventFilter(self)
         self.debug_toggle.toggled.connect(self._toggle_debug_console)
         self.map_layer_toggle.toggled.connect(self._toggle_map_layer)
+        self.reroute_gate_checkbox.toggled.connect(self._toggle_reroute_gate)
+        self.predict_motion_checkbox.toggled.connect(self._toggle_predict_motion)
         self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
 
     def _toggle_map_layer(self, checked: bool) -> None:
         self.canvas.show_map_layer = checked
         self.canvas.update()
+
+    def _toggle_reroute_gate(self, checked: bool) -> None:
+        self.runtime.use_reroute_gate = checked
+
+    def _toggle_predict_motion(self, checked: bool) -> None:
+        self.runtime.predict_motion = checked
 
     def _toggle_debug_console(self, expanded: bool) -> None:
         self.debug_toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
@@ -739,6 +768,33 @@ class ExecutionConsolePage(QWidget):
             elif self.verifier.timed_out:
                 self._log_debug(f"[APPLY] {self._format_apply_report(report)}", level="ERROR")
                 self._fail("Scenario apply confirmation timed out")
+        elif self.controller.state is ExecutionState.RUNNING:
+            self._replan_tick()
+
+    def _replan_tick(self) -> None:
+        """Re-check the owner planner's route against this vision frame.
+
+        Runs once per grSim vision frame (not the 50ms execution tick) --
+        see ``ResearchRuntime.replan_active_robots`` for why most calls are
+        cheap and return nothing changed.
+        """
+        execution_input = self.controller.execution_input
+        owner = self.controller.velocity_owner
+        if execution_input is None or owner is None:
+            return
+        try:
+            changed = self.runtime.replan_active_robots(
+                execution_input.scenario, self.runtime.live_robots
+            )
+        except Exception as exc:
+            self._log_debug(f"[REPLAN] check failed: {exc}", level="ERROR")
+            return
+        if not changed:
+            return
+        self.canvas.paths = self.runtime.active_paths
+        for key, path in changed.items():
+            team = "Y" if key[0] else "B"
+            self._log_debug(f"[REPLAN] {team}{key[1]}: rerouted ({len(path.points_mm)} waypoint(s))")
 
     def _watchdog_tick(self) -> None:
         state = self.controller.state

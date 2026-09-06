@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import replace
 
 import networkx as nx
 
@@ -55,8 +56,16 @@ from research_sdk.planners.common import (
     path_length_mm,
 )
 from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, PlannerOutput
+from research_sdk.planners.reroute import (
+    DEFAULT_PERIODIC_REROUTE_FRAMES,
+    RouteState,
+    commit_reroute,
+    evaluate_route,
+    note_no_reroute,
+)
 
 Point = tuple[float, float]
+RobotKey = tuple[bool, int]
 
 
 def _inflate_circle_to_polygon(centre: Point, radius: float, sides: int) -> list[Point]:
@@ -412,18 +421,87 @@ def plan(
 class VisibilityGraphPlanner:
     """Adapts :func:`plan` above to the ``PlannerAPI.plan`` contract used by
     the UI's planner dropdown (see ``planners/api.py`` / ``ui/runtime.py``).
+
+    ``use_reroute_gate`` (default on) gives this otherwise-stateless planner
+    the same cheap-check-first behaviour ``VoronoiWaypointManager`` has: a
+    call is skipped entirely (direct line clear) or served from the cached
+    path (still clear, nothing rerouted) instead of rebuilding the whole
+    visibility graph on every single call. See ``planners/reroute.py``.
     """
 
-    def __init__(self, **plan_kwargs) -> None:
+    def __init__(
+        self,
+        *,
+        use_reroute_gate: bool = True,
+        periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
+        **plan_kwargs,
+    ) -> None:
         self._plan_kwargs = plan_kwargs
+        self.use_reroute_gate = use_reroute_gate
+        self.periodic_reroute_frames = periodic_reroute_frames
+        self._state_by_robot: dict[RobotKey, RouteState] = {}
+        self._last_output_by_robot: dict[RobotKey, PlannerOutput] = {}
 
     def plan(self, planner_input: PlannerInput) -> PlannerOutput:
+        if self.use_reroute_gate and planner_input.scene is not None:
+            return self._gated_plan(planner_input)
         request = _plan_request_from_planner_input(planner_input)
         result = plan(request, **self._plan_kwargs)
         return _planner_output_from_plan_result(planner_input, result)
 
+    def _gated_plan(self, planner_input: PlannerInput) -> PlannerOutput:
+        robot_key = (bool(planner_input.is_yellow), int(planner_input.robot_id))
+        state = self._state_by_robot.setdefault(robot_key, RouteState())
+        start = (float(planner_input.current_pose[0]), float(planner_input.current_pose[1]))
+        target = (float(planner_input.target_pose[0]), float(planner_input.target_pose[1]))
+        heading = (
+            float(planner_input.target_pose[2]) if len(planner_input.target_pose) > 2 else 0.0
+        )
+        target_pose = (target[0], target[1], heading)
+
+        decision = evaluate_route(
+            planner_input.scene,
+            start,
+            target,
+            state,
+            ignore_robots={robot_key},
+            clearance_mm=planner_input.clearance_mm,
+            periodic_reroute_frames=self.periodic_reroute_frames,
+        )
+        if decision.is_path_free:
+            commit_reroute(state, (), target_pose)
+            output = PlannerOutput(
+                waypoints=(),
+                current_waypoint_index=0,
+                active_target_pose=target_pose,
+                is_path_free=True,
+                need_reroute=False,
+                did_reroute=False,
+            )
+            self._last_output_by_robot[robot_key] = output
+            return output
+
+        cached = self._last_output_by_robot.get(robot_key)
+        if not decision.need_reroute and cached is not None:
+            note_no_reroute(state)
+            return replace(cached, need_reroute=False, did_reroute=False)
+
+        request = _plan_request_from_planner_input(planner_input)
+        result = plan(request, **self._plan_kwargs)
+        output = _planner_output_from_plan_result(planner_input, result)
+        commit_reroute(state, output.waypoints, target_pose)
+        self._last_output_by_robot[robot_key] = output
+        return output
+
     def reset(self, robot_id: int | None = None, is_yellow: bool | None = None) -> None:
-        """Stateless planner -- nothing to clear, kept for interface parity."""
+        """Clear one robot's reroute-gate state, or every robot's when none is given."""
+        if robot_id is None or is_yellow is None:
+            self._state_by_robot.clear()
+            self._last_output_by_robot.clear()
+            return
+        key = (bool(is_yellow), int(robot_id))
+        self._state_by_robot.pop(key, None)
+        self._last_output_by_robot.pop(key, None)
 
 
 def _plan_request_from_planner_input(planner_input: PlannerInput) -> PlanRequest:
