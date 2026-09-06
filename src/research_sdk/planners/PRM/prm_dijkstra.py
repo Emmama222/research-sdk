@@ -280,6 +280,11 @@ class PRMPlanner:
     """
 
     def __init__(self, **plan_kwargs) -> None:
+        # `plan()` defaults to a fixed seed (reproducible for tests/demos
+        # comparing planners); the UI wants genuine PRM behaviour -- fresh
+        # random sampling on every call -- so default to seed=None here
+        # unless the caller explicitly pins one.
+        plan_kwargs.setdefault("seed", None)
         self._plan_kwargs = plan_kwargs
 
     def plan(self, planner_input: PlannerInput) -> PlannerOutput:
