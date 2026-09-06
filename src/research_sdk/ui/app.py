@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from math import cos, hypot, pi, sin
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import QPointF, QRectF, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QThread, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QFileDialog,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -27,7 +25,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSpinBox,
     QSplitter,
     QTabWidget,
     QToolTip,
@@ -46,7 +43,6 @@ from research_sdk.config import (
     VISIBILITY_POLYGON_SIDES,
 )
 from research_sdk.network.ssl_sockets import Vision, grSimVision
-from research_sdk.planners.common import StepRecorder
 from research_sdk.ui.execution.controller import ExecutionState
 from research_sdk.ui.execution.page import ExecutionConsolePage
 from research_sdk.ui.runtime import (
@@ -64,13 +60,11 @@ from research_sdk.ui.scenarios import (
     ScenarioStore,
 )
 from research_sdk.ui.session import (
-    ExperimentRecorder,
+    PlannerPreview,
+    PlannerPreviewBuilder,
     RunMetrics,
-    SessionController,
-    SessionState,
     discover_planners,
     export_planner_results,
-    planner_debug_geometry,
 )
 
 CONFIG_FOLDER = Path(__file__).resolve().parents[1] / "config"
@@ -123,23 +117,6 @@ class VisionMonitor(QThread):
     def stop(self) -> None:
         self._running = False
         self.wait(1200)
-
-
-class LatencyLabel(QLabel):
-    def set_latency(self, latency_ms: float | None) -> None:
-        if latency_ms is None:
-            self.setText("-- ms")
-            color = "#ef5350"
-        elif latency_ms < 50:
-            self.setText(f"{latency_ms:.1f} ms")
-            color = "#4caf50"
-        elif latency_ms < 200:
-            self.setText(f"{latency_ms:.1f} ms")
-            color = "#ffca28"
-        else:
-            self.setText(f"{latency_ms:.1f} ms")
-            color = "#ef5350"
-        self.setStyleSheet(f"color: {color}; font-weight: 700;")
 
 
 class FieldCanvas(QWidget):
@@ -430,18 +407,6 @@ class FieldCanvas(QWidget):
             return None
         distance, index = min(candidates)
         return index if distance < 35 else None
-
-
-@dataclass(frozen=True, slots=True)
-class PlannerPreview:
-    paths: tuple[PlannedRobotPath, ...]
-    # None means this planner has no real map-vs-search split available
-    # (no StepRecorder support) -- see _plan()'s comment for why that must
-    # not be papered over with a fabricated number.
-    map_time_ms: float | None
-    planning_time_ms: float
-    nodes: tuple[tuple[float, float], ...] = ()
-    edges: tuple[tuple[tuple[float, float], tuple[float, float]], ...] = ()
 
 
 class ScenarioPlannerCanvas(FieldCanvas):
@@ -823,6 +788,7 @@ class ScenarioPlannerPage(QWidget):
         super().__init__()
         self.runtime = runtime
         self.store = store
+        self._preview_builder = PlannerPreviewBuilder(runtime)
         self.scenario: Scenario | None = None
         self.scenario_path: Path | None = None
         self.previews: dict[str, PlannerPreview] = {}
@@ -1082,58 +1048,11 @@ class ScenarioPlannerPage(QWidget):
 
         label = self.planner_selector.currentText()
         planner_cls = self.planner_selector.currentData()
-        recorder = StepRecorder()
-        self.runtime.set_planner(planner_cls, record=recorder)
-        failure_note = ""
-        try:
-            paths = self.runtime.plan(self.scenario)
-        except Exception as exc:
-            paths = ()
-            failure_note = f" · {label}: {exc}"
-        else:
-            if self.runtime.last_plan_failures:
-                failed_ids = ", ".join(
-                    f"{'Y' if p.is_yellow else 'B'}{p.robot_id}" for p in paths if p.failed
-                )
-                failure_note = (
-                    f" · {self.runtime.last_plan_failures} robot(s) found no route "
-                    f"({failed_ids}) -- flagged red, held in place"
-                )
-        planning_ms = sum(self.runtime.last_plan_durations_ms)
-        nodes, edges = planner_debug_geometry(label, recorder, tuple(self.scenario.obstacles))
-        if recorder.map_time_ms is not None:
-            # A full build happened this call and logged into StepRecorder
-            # -- all three planners support this now (VisibilityGraph, PRM,
-            # and VoronoiDijkstraPlanner via a coarser two-timestamp split,
-            # see voronoi_dijkstra.py's plan() docstring) -- a real
-            # map-vs-search split.
-            map_ms: float | None = recorder.map_time_ms
-            search_ms = (
-                recorder.search_time_ms
-                if recorder.search_time_ms is not None
-                else max(0.0, planning_ms - map_ms)
-            )
-        else:
-            # This call took a direct-line-of-sight or reused-previous-path
-            # shortcut and never built anything, so there's genuinely no map
-            # cost to report -- not a planner limitation. (Voronoi used to
-            # have no recorder support at all, and this branch used to fall
-            # back to timing _debug_geometry()'s *separate*, cheaper
-            # debug-only map build and subtracting it from the total, which
-            # dumped almost the entire real map-generation cost into
-            # "search" whenever Voronoi *did* do a full build -- confirmed
-            # wrong by decision 6 in docs/decisions/0005-parallel-planner-
-            # execution.md: swapping its search implementation changed
-            # nothing. Fixed by giving Voronoi real recorder support instead
-            # of working around the gap.) Show the honest total.
-            map_ms = None
-            search_ms = planning_ms
-        run_metrics = RunMetrics()
-        run_metrics.record_pipeline(0.0, map_ms or 0.0)
-        run_metrics.record_planning((search_ms,), failures=self.runtime.last_plan_failures)
-        run_metrics.finish(completed=False)
+        preview, run_metrics, failure_note = self._preview_builder.build(
+            self.scenario, planner_cls, label
+        )
 
-        self.previews = {label: PlannerPreview(paths, map_ms, search_ms, nodes, edges)}
+        self.previews = {label: preview}
         self.metrics = {label: run_metrics}
         self._planner_changed()
         self.status.setText(f"Planned {label}; no velocities sent{failure_note}")
@@ -1301,22 +1220,10 @@ class ResearchConsole(QMainWindow):
         self.setWindowTitle("Research SDK · Planner Lab")
         self.resize(1320, 820)
         self.store = ScenarioStore()
-        self.session = SessionController()
         self.runtime = ResearchRuntime()
-        self.vision_thread: VisionMonitor | None = None
         self.display_vision_thread: VisionMonitor | None = None
-        self.current_scenario: Scenario | None = None
-        self.current_scenario_path: Path | None = None
-        self.recorder: ExperimentRecorder | None = None
-        self.planner_metrics: dict[str, RunMetrics] = {}
-        self.active_planner_name: str | None = None
-        self.active_plan_paths: tuple[PlannedRobotPath, ...] = ()
-        self.control_timer = QTimer(self)
-        self.control_timer.setInterval(50)
-        self.control_timer.timeout.connect(self._control_tick)
 
         self.tabs = QTabWidget()
-        self.experiment_page = QWidget()
         self.execution_page = ExecutionConsolePage(self.runtime, self.store)
         self.scenario_planner_page = ScenarioPlannerPage(self.runtime, self.store)
         self.config_page = ConfigurationsPage()
@@ -1324,12 +1231,9 @@ class ResearchConsole(QMainWindow):
         self.tabs.addTab(self.scenario_planner_page, "Scenario Planner")
         self.tabs.addTab(self.config_page, "Configurations")
         self.setCentralWidget(self.tabs)
-        self._build_experiment_page()
         self.execution_page.navigate_to_planner.connect(
             lambda: self.tabs.setCurrentWidget(self.scenario_planner_page)
         )
-        self._refresh_scenarios()
-        self._refresh_controls()
         self._start_live_grsim_display()
 
     def _start_live_grsim_display(self) -> None:
@@ -1338,568 +1242,14 @@ class ResearchConsole(QMainWindow):
         self.display_vision_thread.failed.connect(self._live_grsim_failed)
         self.display_vision_thread.start()
 
-    def _build_experiment_page(self) -> None:
-        self.live_canvas = FieldCanvas()
-        self.canvas = FieldCanvas()
-        self.canvas.scenario_changed.connect(self._scenario_edited)
-        self.canvas.live_robot_selected.connect(self._select_plan_robot)
-        self.field_tabs = QTabWidget()
-        self.field_tabs.addTab(self.live_canvas, "Existing Field")
-        self.field_tabs.addTab(self.canvas, "Plan Course")
-        self.field_tabs.currentChanged.connect(self._field_mode_changed)
-        panel = QWidget()
-        form = QFormLayout(panel)
-
-        self.scenario_selector = QComboBox()
-        self.fresh_snapshot_button = QPushButton("Fresh snapshot")
-        self.apply_plan_button = QPushButton("Apply to grSim")
-        test_grsim = QPushButton("Test grSim connection")
-        form.addRow(self.fresh_snapshot_button)
-        form.addRow(self.apply_plan_button)
-        form.addRow(test_grsim)
-
-        self.edit_mode = QComboBox()
-        self.edit_mode.addItems(
-            ("select_live_robot", "relocate_start", "set_target", "add_obstacle")
-        )
-        self.robot_id = QSpinBox(); self.robot_id.setRange(0, 15)
-        self.team = QComboBox(); self.team.addItems(("Yellow", "Blue"))
-        self.obstacle_radius = QSpinBox(); self.obstacle_radius.setRange(1, 2000); self.obstacle_radius.setValue(int(ROBOT_RADIUS_MM))
-        form.addRow("Plan Course tool", self.edit_mode)
-
-        self.planner_selector = QComboBox()
-        planners = discover_planners()
-        if planners:
-            for label, planner_cls in planners.items():
-                self.planner_selector.addItem(label, planner_cls)
-        else:
-            self.planner_selector.addItem("No planners discovered", None)
-        form.addRow("Active planner", self.planner_selector)
-        self.planner_selector.currentIndexChanged.connect(self._planner_changed)
-
-        self.run_button = QPushButton("Run")
-        self.stop_button = QPushButton("Stop")
-        self.erase_button = QPushButton("Erase plan")
-        self.reset_button = QPushButton("Reset")
-        row = QHBoxLayout()
-        for button in (self.run_button, self.stop_button, self.erase_button, self.reset_button):
-            row.addWidget(button)
-        form.addRow(row)
-
-        self.vision_button = QCheckBox("Vision enabled")
-        self.vision_source = QComboBox(); self.vision_source.addItems(("grSim vision", "real-life SSL vision"))
-        form.addRow(self.vision_button)
-        form.addRow("Vision source", self.vision_source)
-
-        self.receive_latency = LatencyLabel(); self.receive_latency.set_latency(None)
-        self.send_latency = LatencyLabel(); self.send_latency.set_latency(None)
-        form.addRow("Network receive", self.receive_latency)
-        form.addRow("Network send", self.send_latency)
-
-        export_a = QPushButton("Export results A")
-        export_b = QPushButton("Export results B")
-        form.addRow(export_a)
-        form.addRow(export_b)
-        self.status = QLabel("After reset · ready")
-        self.status.setWordWrap(True)
-        form.addRow("Status", self.status)
-
-        splitter = QSplitter()
-        splitter.addWidget(self.field_tabs)
-        splitter.addWidget(panel)
-        splitter.setStretchFactor(0, 1)
-        layout = QVBoxLayout(self.experiment_page)
-        layout.addWidget(splitter)
-
-        self.fresh_snapshot_button.clicked.connect(self._new_scenario)
-        self.apply_plan_button.clicked.connect(self._save_scenario)
-        test_grsim.clicked.connect(self._test_grsim_connection)
-        self.edit_mode.currentTextChanged.connect(self._update_canvas_tool)
-        self.robot_id.valueChanged.connect(self._update_canvas_tool)
-        self.team.currentIndexChanged.connect(self._update_canvas_tool)
-        self.obstacle_radius.valueChanged.connect(self._update_canvas_tool)
-        self.run_button.clicked.connect(self._run)
-        self.stop_button.clicked.connect(self._stop)
-        self.erase_button.clicked.connect(self._erase)
-        self.reset_button.clicked.connect(self._reset)
-        self.vision_button.toggled.connect(self._toggle_vision)
-        export_a.clicked.connect(lambda: self._export("a"))
-        export_b.clicked.connect(lambda: self._export("b"))
-        self._planner_changed()
-
-    def _new_scenario(self) -> None:
-        self._capture_plan_snapshot()
-
-    def _field_mode_changed(self, index: int) -> None:
-        if index == 1:
-            self._capture_plan_snapshot()
-
-    def _capture_plan_snapshot(self) -> None:
-        """Start every Plan Course visit from the latest runtime feedback."""
-        snapshot = self.runtime.world_snapshot
-        if snapshot is None:
-            self.current_scenario = None
-            self.canvas.set_scenario(None)
-            self.field_tabs.blockSignals(True)
-            self.field_tabs.setCurrentIndex(1)
-            self.field_tabs.blockSignals(False)
-            self.status.setText(
-                "Plan Course is waiting for the first complete world snapshot from grSim."
-            )
-            return
-        self.current_scenario = None
-        self.current_scenario_path = None
-        self.canvas.set_scenario(None)
-        self.canvas.capture_world_snapshot(snapshot)
-        self.edit_mode.setCurrentText("select_live_robot")
-        self.field_tabs.blockSignals(True)
-        self.field_tabs.setCurrentIndex(1)
-        self.field_tabs.blockSignals(False)
-        count = len(self.canvas.live_robots)
-        self.status.setText(
-            f"Fresh snapshot captured ({count} robots). Click a robot to plan its course."
-        )
-
-    def _select_plan_robot(self, robot: LiveRobot) -> None:
-        robots = [
-            ScenarioRobot(
-                robot.robot_id,
-                robot.is_yellow,
-                robot.position_mm,
-                robot.position_mm,
-                robot.orientation_rad,
-            )
-        ]
-        robots.extend(
-            ScenarioRobot(
-                other.robot_id,
-                other.is_yellow,
-                other.position_mm,
-                other.position_mm,
-                other.orientation_rad,
-            )
-            for other in self.canvas.live_robots.values()
-            if (other.is_yellow, other.robot_id) != (robot.is_yellow, robot.robot_id)
-        )
-        self.current_scenario = Scenario(
-            f"snapshot_{int(time.time())}",
-            robots=robots,
-            ball=(
-                ScenarioBall(self.canvas.live_ball_mm)
-                if self.canvas.live_ball_mm is not None
-                else None
-            ),
-        )
-        self.current_scenario_path = None
-        self.canvas.set_scenario(self.current_scenario)
-        self.canvas.selected_robot = 0
-        self.edit_mode.setCurrentText("relocate_start")
-        self.status.setText(
-            f"Selected {'yellow' if robot.is_yellow else 'blue'} robot {robot.robot_id}. "
-            "Click its proposed start, then choose Set target and click the destination."
-        )
-        self._refresh_controls()
-
-    def _save_plan_as(self) -> None:
-        if self.current_scenario is None or not self.current_scenario.robots:
-            QMessageBox.warning(self, "Nothing to save", "Capture and select a robot first.")
-            return
-        name, accepted = QInputDialog.getText(
-            self,
-            "Save plan",
-            "Course name",
-            text=self.current_scenario.name,
-        )
-        if not accepted or not name.strip():
-            return
-        try:
-            self.current_scenario.name = name.strip()
-            self.current_scenario.schema_version = 3
-            path = self.store.save(self.current_scenario)
-            self.current_scenario_path = path
-            self._refresh_scenarios()
-            index = self.scenario_selector.findData(str(path))
-            if index >= 0:
-                self.scenario_selector.setCurrentIndex(index)
-            self.status.setText(
-                f"Saved {path.name}: {len(self.current_scenario.robots)} robots and "
-                f"ball={'yes' if self.current_scenario.ball is not None else 'no'}"
-            )
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.critical(self, "Cannot save plan", str(exc))
-
-    def _update_plan_file(self) -> None:
-        if self.current_scenario is None or not self.current_scenario.robots:
-            QMessageBox.warning(self, "Nothing to update", "Capture or load a plan first.")
-            return
-        if self.current_scenario_path is None:
-            QMessageBox.information(
-                self,
-                "Save required",
-                "This is a new plan. Use Save plan as new file first.",
-            )
-            return
-        try:
-            self.current_scenario.schema_version = 3
-            path = self.store.update(self.current_scenario_path, self.current_scenario)
-            self.status.setText(
-                f"Updated {path.name}: {len(self.current_scenario.robots)} robots and "
-                f"ball={'yes' if self.current_scenario.ball is not None else 'no'}"
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "Cannot update plan", str(exc))
-
-    def _save_scenario(self) -> None:
-        if self.current_scenario is None or not self.current_scenario.robots:
-            QMessageBox.warning(self, "Incomplete course", "Select a robot first.")
-            return
-        robot = self.current_scenario.robots[0]
-        if robot.target_mm is None or robot.start_mm == robot.target_mm:
-            QMessageBox.warning(
-                self,
-                "Incomplete course",
-                "Choose Set target and click a destination before applying.",
-            )
-            return
-        try:
-            self.runtime.apply_scenario(self.current_scenario, include_obstacles=False)
-            self.send_latency.set_latency(self.runtime.last_send_latency_ms)
-            self.session.scenario_forwarded()
-            self.status.setText("Plan applied to grSim; ready to generate and run the course")
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.critical(self, "Scenario forwarding failed", str(exc))
-
-    def _test_grsim_connection(self) -> None:
-        try:
-            probe = self.runtime.test_grsim_connection()
-            vision_confirmed = (
-                self.vision_thread is not None
-                and self.vision_thread.isRunning()
-                and self.runtime.last_receive_latency_ms is not None
-            )
-            confirmation = (
-                "Vision is also receiving packets from grSim."
-                if vision_confirmed
-                else "UDP has no acknowledgement; enable grSim vision to confirm receipt."
-            )
-            self.status.setText(
-                f"UDP route ready: {probe.local_address[0]}:{probe.local_address[1]} → "
-                f"{probe.destination[0]}:{probe.destination[1]}. {confirmation}"
-            )
-        except Exception as exc:
-            QMessageBox.critical(self, "grSim connection test failed", str(exc))
-
-    def _clear_obstacles(self) -> None:
-        if self.current_scenario is None:
-            return
-        self.current_scenario.clear_obstacles()
-        self._scenario_edited()
-        self.canvas.update()
-
-    def _load_scenario(self) -> None:
-        if not self.scenario_selector.currentData():
-            return
-        try:
-            path = Path(self.scenario_selector.currentData())
-            self.current_scenario = self.store.load(path)
-            self.current_scenario_path = path
-            self.canvas.set_scenario(self.current_scenario)
-            if self.current_scenario.ball is not None:
-                self.canvas.live_ball_mm = self.current_scenario.ball.position_mm
-                self.canvas.live_ball_seen_at = time.monotonic()
-            self.status.setText(f"Loaded {self.current_scenario.name}; forward it before running")
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.critical(self, "Cannot load scenario", str(exc))
-
-    def _refresh_scenarios(self) -> None:
-        self.scenario_selector.clear()
-        for path in self.store.list_paths():
-            self.scenario_selector.addItem(path.stem, str(path))
-
-    def _update_canvas_tool(self) -> None:
-        self.canvas.mode = self.edit_mode.currentText()
-        self.canvas.robot_id = self.robot_id.value()
-        self.canvas.obstacle_id = self.robot_id.value()
-        self.canvas.robot_yellow = self.team.currentIndex() == 0
-        self.canvas.obstacle_yellow = self.team.currentIndex() == 0
-        self.canvas.obstacle_radius = self.obstacle_radius.value()
-
-    def _planner_changed(self) -> None:
-        self.canvas.planner_key = planner_key(self.planner_selector.currentData())
-        # Changing the obstacle-layout preview must not erase or replace the
-        # plan that is currently active for execution.
-        self.canvas.update()
-
-    def _scenario_edited(self) -> None:
-        self.canvas.clear_paths()
-        self.live_canvas.clear_paths()
-        self.active_planner_name = None
-        self.active_plan_paths = ()
-        self.status.setText("Course edited · apply it to grSim when ready")
-
-    def _run(self) -> None:
-        if self.current_scenario is None:
-            return
-        selected_index = self.planner_selector.currentIndex()
-        selected_name = self.planner_selector.currentText()
-        selected_class = self.planner_selector.currentData()
-        self.recorder = ExperimentRecorder(
-            self.current_scenario.name,
-            selected_name,
-        )
-        self.planner_metrics = {}
-        planning_recorded = False
-        try:
-            self.session.run()
-            paths = ()
-            comparison = []
-            selected_error: Exception | None = None
-            for index in range(self.planner_selector.count()):
-                planner_name = self.planner_selector.itemText(index)
-                planner_class = self.planner_selector.itemData(index)
-                metrics = (
-                    self.recorder.metrics if index == selected_index else RunMetrics()
-                )
-                update = self.runtime.last_pipeline_update
-                if update is not None:
-                    metrics.record_pipeline(
-                        update.processing_latency_ms,
-                        update.mapping_time_ms,
-                    )
-                self.runtime.set_planner(planner_class)
-                try:
-                    candidate_paths = self.runtime.plan(self.current_scenario)
-                except Exception as exc:
-                    metrics.record_planning(
-                        self.runtime.last_plan_durations_ms,
-                        max(1, self.runtime.last_plan_failures),
-                    )
-                    comparison.append({"planner": planner_name, "error": str(exc)})
-                    if index == selected_index:
-                        selected_error = exc
-                else:
-                    metrics.record_planning(
-                        self.runtime.last_plan_durations_ms,
-                        self.runtime.last_plan_failures,
-                    )
-                    comparison.append(
-                        {"planner": planner_name, "planning": metrics.row("a")}
-                    )
-                    if index == selected_index:
-                        paths = candidate_paths
-                if index != selected_index:
-                    metrics.finish(completed=False)
-                self.planner_metrics[planner_name] = metrics
-            self.runtime.set_planner(selected_class)
-            if selected_error is not None:
-                raise selected_error
-            planning_recorded = True
-            # Only the selected planner becomes active. The other candidates
-            # above are benchmarked, but their paths never reach the renderer
-            # or velocity controller.
-            self.active_planner_name = selected_name
-            self.active_plan_paths = paths
-            self._show_active_plan()
-            self.runtime.start_execution(paths)
-            self.recorder.metrics.start_execution()
-            self.control_timer.start()
-            self.recorder.record(
-                "planner_comparison_generated",
-                planners=comparison,
-            )
-            self.recorder.record(
-                "plans_generated",
-                robots=[
-                    {
-                        "robot_id": path.robot_id,
-                        "is_yellow": path.is_yellow,
-                        "points_mm": path.points_mm,
-                    }
-                    for path in paths
-                ],
-            )
-            self.status.setText(
-                f"Benchmarked {len(self.planner_metrics)} planners; executing {selected_name} · "
-                f"recording events in {self.recorder.folder}"
-            )
-            self._refresh_controls()
-        except Exception as exc:
-            if not planning_recorded:
-                if selected_name not in self.planner_metrics:
-                    self.recorder.metrics.record_planning(
-                        self.runtime.last_plan_durations_ms,
-                        self.runtime.last_plan_failures,
-                    )
-            self.recorder.finish(completed=False)
-            self.recorder.close()
-            if self.session.state is SessionState.RUNNING:
-                self.session.stop()
-            QMessageBox.critical(self, "Cannot run scenario", str(exc))
-
-    def _stop(self) -> None:
-        try:
-            self.control_timer.stop()
-            self.runtime.stop_execution()
-            self.session.stop()
-            if self.recorder is not None:
-                self.recorder.record("run_stopped")
-                self.recorder.finish(completed=False)
-                self.recorder.close()
-            self.status.setText("Stopped · plan retained")
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.warning(self, "Cannot stop", str(exc))
-
-    def _show_active_plan(self) -> None:
-        """Keep the one executable plan pinned on both field views."""
-        self.canvas.set_paths(self.active_plan_paths)
-        self.live_canvas.set_paths(self.active_plan_paths)
-
-    def _erase(self) -> None:
-        try:
-            self.control_timer.stop()
-            self.runtime.stop_execution()
-            self.session.erase_plan()
-            self.runtime.reset_planner()
-            self.canvas.clear_paths()
-            self.live_canvas.clear_paths()
-            self.active_planner_name = None
-            self.active_plan_paths = ()
-            if self.recorder is not None:
-                if not self.recorder.closed:
-                    self.recorder.record("plan_erased")
-                    self.recorder.finish(completed=False)
-                    self.recorder.close()
-                self.recorder = None
-            self.status.setText("Active plan erased")
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.warning(self, "Cannot erase", str(exc))
-
-    def _reset(self) -> None:
-        try:
-            self.control_timer.stop()
-            self.runtime.stop_execution()
-            self.session.reset()
-            self.runtime.reset_planner()
-            if self.recorder is not None and not self.recorder.closed:
-                self.recorder.record("course_reset")
-                self.recorder.finish(completed=False)
-                self.recorder.close()
-            self.recorder = None
-            self.planner_metrics = {}
-            self.live_canvas.clear_paths()
-            self.active_planner_name = None
-            self.active_plan_paths = ()
-            self.current_scenario = None
-            self.current_scenario_path = None
-            self.canvas.set_scenario(None)
-            self.canvas.selected_robot = None
-            self.scenario_selector.setCurrentIndex(-1)
-            self.edit_mode.setCurrentText("select_live_robot")
-            self.robot_id.setValue(0)
-            self.team.setCurrentIndex(0)
-            self.obstacle_radius.setValue(int(ROBOT_RADIUS_MM))
-            if self.planner_selector.count():
-                self.planner_selector.setCurrentIndex(0)
-            self.field_tabs.setCurrentIndex(0)
-            self.status.setText(
-                "Course planning reset · capture a fresh snapshot to start again"
-            )
-            self._refresh_controls()
-        except Exception as exc:
-            QMessageBox.warning(self, "Cannot reset", str(exc))
-
-    def _toggle_vision(self, enabled: bool) -> None:
-        try:
-            self.session.set_vision(enabled)
-            if enabled:
-                self.vision_thread = VisionMonitor(self.vision_source.currentText(), self)
-                self.vision_thread.packet_received.connect(self._vision_packet_received)
-                self.vision_thread.failed.connect(self._vision_failed)
-                self.vision_thread.start()
-                self.status.setText("Vision started with current network_input.yaml")
-            elif self.vision_thread is not None:
-                self.vision_thread.stop()
-                self.vision_thread = None
-                self.runtime.last_receive_latency_ms = None
-                self.receive_latency.set_latency(None)
-            self._refresh_controls()
-        except Exception as exc:
-            self.vision_button.blockSignals(True)
-            self.vision_button.setChecked(not enabled)
-            self.vision_button.blockSignals(False)
-            QMessageBox.warning(self, "Vision state unchanged", str(exc))
-
-    def _vision_failed(self, message: str) -> None:
-        self.runtime.last_receive_latency_ms = None
-        self.receive_latency.set_latency(None)
-        self.status.setText(f"Vision error: {message}")
-
-    def _control_tick(self) -> None:
-        try:
-            live_robots = self.runtime.live_robots
-            if self.recorder is not None and not self.recorder.closed:
-                self.recorder.metrics.observe_robots(live_robots)
-            if not self.runtime.execute_tick(live_robots):
-                return
-            self.control_timer.stop()
-            self.runtime.stop_execution()
-            self.session.stop()
-            if self.recorder is not None and not self.recorder.closed:
-                self.recorder.record("robots_arrived")
-                self.recorder.finish(completed=True)
-                self.recorder.close()
-            self.status.setText("Completed · all robots reached their targets")
-            self._refresh_controls()
-        except Exception as exc:
-            self.control_timer.stop()
-            try:
-                self.runtime.stop_execution()
-            except Exception:
-                pass
-            try:
-                self.session.stop()
-            except Exception:
-                pass
-            if self.recorder is not None and not self.recorder.closed:
-                self.recorder.record("execution_failed", error=str(exc))
-                self.recorder.finish(completed=False)
-                self.recorder.close()
-            self.status.setText(f"Execution stopped: {exc}")
-            self._refresh_controls()
-
-    def _vision_packet_received(self, packet, latency_ms: float) -> None:
-        del packet
-        self.runtime.last_receive_latency_ms = latency_ms
-        self.receive_latency.set_latency(latency_ms)
-
     def _live_grsim_packet_received(self, packet, latency_ms: float) -> None:
-        frame = self.runtime.ingest_vision_packet(packet)
+        del latency_ms
+        self.runtime.ingest_vision_packet(packet)
         update = self.runtime.last_pipeline_update
-        if update is not None and self.recorder is not None and not self.recorder.closed:
-            self.recorder.metrics.record_pipeline(
-                update.processing_latency_ms,
-                update.mapping_time_ms,
-            )
-        if frame is not None:
-            self.live_canvas.update_live_frame(frame)
-            if (
-                self.field_tabs.currentIndex() == 1
-                and self.current_scenario is None
-                and not self.canvas.live_robots
-            ):
-                self._capture_plan_snapshot()
         if update is not None:
             self.execution_page.process_snapshot(update.snapshot)
-        self.runtime.last_receive_latency_ms = latency_ms
-        self.receive_latency.set_latency(latency_ms)
 
     def _live_grsim_failed(self, message: str) -> None:
-        self.status.setText(f"Live grSim display unavailable: {message}")
         if self.execution_page.controller.state in (
             ExecutionState.APPLYING,
             ExecutionState.RUNNING,
@@ -1909,35 +1259,6 @@ class ResearchConsole(QMainWindow):
             self.execution_page.emergency_stop(
                 error=f"Fatal grSim vision error: {message}"
             )
-
-    def _export(self, format_name: str) -> None:
-        destination, _ = QFileDialog.getSaveFileName(
-            self,
-            f"Export result format {format_name.upper()}",
-            f"results_{format_name}.csv",
-            "CSV files (*.csv)",
-        )
-        if destination:
-            if self.recorder is None:
-                QMessageBox.warning(self, "No results", "Run an experiment before exporting.")
-                return
-            metrics = self.planner_metrics or {
-                self.planner_selector.currentText(): self.recorder.metrics
-            }
-            path = export_planner_results(destination, format_name, metrics)
-            self.status.setText(
-                f"Exported {len(metrics)} planner result rows to {path}"
-            )
-
-    def _refresh_controls(self) -> None:
-        state = self.session.state
-        self.run_button.setEnabled(state in (SessionState.SCENARIO_READY, SessionState.STOPPED) and self.session.has_scenario)
-        self.stop_button.setEnabled(state is SessionState.RUNNING)
-        self.erase_button.setEnabled(state is not SessionState.RUNNING and self.session.has_plan)
-        self.reset_button.setEnabled(state is not SessionState.RUNNING)
-        self.vision_button.setEnabled(self.session.can_change_vision)
-        self.vision_source.setEnabled(self.session.can_change_vision_source)
-        self.planner_selector.setEnabled(state is not SessionState.RUNNING)
 
     def closeEvent(self, event) -> None:
         if self.config_page.dirty:
@@ -1949,17 +1270,10 @@ class ResearchConsole(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
-        if self.vision_thread is not None:
-            self.vision_thread.stop()
         self.execution_page.shutdown()
-        self.control_timer.stop()
         self.runtime.stop_execution()
         if self.display_vision_thread is not None:
             self.display_vision_thread.stop()
-        if self.recorder is not None:
-            if not self.recorder.closed:
-                self.recorder.finish(completed=False)
-            self.recorder.close()
         event.accept()
 
 
