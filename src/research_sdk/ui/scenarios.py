@@ -33,6 +33,7 @@ class ScenarioObstacle:
     radius_mm: float
     velocity_mmps: Point = (0.0, 0.0)
     planner_keys: tuple[str, ...] = ()
+    patrol_waypoints: tuple[Point, ...] = ()
 
     def applies_to(self, planner_key: str | None) -> bool:
         """Return whether this obstacle belongs to the selected algorithm.
@@ -136,6 +137,9 @@ class Scenario:
                     radius_mm=float(obstacle["radius_mm"]),
                     velocity_mmps=tuple(obstacle.get("velocity_mmps", (0.0, 0.0))),
                     planner_keys=tuple(str(key) for key in obstacle.get("planner_keys", ())),
+                    patrol_waypoints=tuple(
+                        tuple(point) for point in obstacle.get("patrol_waypoints", ())
+                    ),
                 )
                 for obstacle in payload.get("obstacles", ())
             ],
