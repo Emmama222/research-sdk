@@ -177,6 +177,7 @@ class ExecutionFieldCanvas(QWidget):
         self._draw_scenario(painter)
         self._draw_moving_obstacle_buffers(painter)
         self._draw_paths(painter)
+        self._draw_patrol_paths(painter)
         self._draw_robots(painter)
         if self.state in (
             ExecutionState.PAUSED,
@@ -316,6 +317,30 @@ class ExecutionFieldCanvas(QWidget):
                 waypoint = self._to_screen(path.points_mm[index])
                 painter.setBrush(QColor("#ffee58"))
                 painter.drawEllipse(waypoint, 6, 6)
+
+    def _draw_patrol_paths(self, painter: QPainter) -> None:
+        """Draw each patrol obstacle's route as an open line from spawn
+        through each waypoint in order. The obstacle bounces back and forth
+        along this same line rather than looping, so there is no closing
+        edge back to spawn or to the first waypoint.
+        """
+        if self.scenario is None:
+            return
+        painter.setBrush(Qt.NoBrush)
+        for obstacle in self.scenario.obstacles:
+            if not obstacle.patrol_waypoints:
+                continue
+            centre = self._to_screen(obstacle.position_mm)
+            waypoints = [self._to_screen(point) for point in obstacle.patrol_waypoints]
+            painter.setPen(QPen(QColor("#ba68c8"), 3, Qt.DashDotLine))
+            route = [centre, *waypoints]
+            for first, second in zip(route, route[1:]):
+                painter.drawLine(first, second)
+            painter.setBrush(QColor("#ba68c8"))
+            painter.setPen(Qt.NoPen)
+            for point in waypoints:
+                painter.drawEllipse(point, 5, 5)
+            painter.setBrush(Qt.NoBrush)
 
     def _draw_robots(self, painter: QPainter) -> None:
         now = time.monotonic()
@@ -921,7 +946,7 @@ class ExecutionConsolePage(QWidget):
             execution_input = self.controller.execution_input
             assert execution_input is not None
             self.runtime.set_planner(execution_input.planner_classes[planner])
-            self.runtime.start_execution(paths)
+            self.runtime.start_execution(paths, scenario=execution_input.scenario)
             self.canvas.paths = paths
             self._replan_frame_counter = 0
             self.current_metrics = deepcopy(self.metric_templates)
@@ -1197,7 +1222,9 @@ class ExecutionConsolePage(QWidget):
         self.controller.selections_locked = False
         paths = self.controller.run(owner)
         indexes = {_parse_robot_key(key): value for key, value in checkpoint.waypoint_indexes.items()}
-        self.runtime.start_execution(paths, waypoint_indices=indexes, paused=True)
+        self.runtime.start_execution(
+            paths, waypoint_indices=indexes, paused=True, scenario=execution_input.scenario
+        )
         self.controller.pause()
         self.canvas.paths = paths
         self.canvas.waypoint_indices = indexes
