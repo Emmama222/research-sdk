@@ -418,6 +418,7 @@ class ScenarioPlannerCanvas(FieldCanvas):
     def __init__(self) -> None:
         super().__init__()
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.mode = "starting_pos"
         self.selected_obstacle: int | None = None
         self.cursor_mm: tuple[float, float] | None = None
@@ -545,6 +546,41 @@ class ScenarioPlannerCanvas(FieldCanvas):
             self.scenario.robots[self.selected_robot] = replace(robot, target_mm=point)
             self._commit_edit("Target position changed")
 
+        if self.mode == "patrol":
+            if obstacle_index is not None:
+                self.selected_obstacle = obstacle_index
+                self.selected_robot = None
+                self.selection_changed.emit()
+                self.update()
+                return
+            if self.selected_obstacle is not None:
+                obstacle = self.scenario.obstacles[self.selected_obstacle]
+                self.scenario.obstacles[self.selected_obstacle] = replace(
+                    obstacle, patrol_waypoints=(*obstacle.patrol_waypoints, point)
+                )
+                self._commit_edit("Patrol waypoint added")
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() not in (Qt.Key_Delete, Qt.Key_Backspace):
+            super().keyPressEvent(event)
+            return
+        if self.scenario is None:
+            return
+        if self.selected_obstacle is not None:
+            obstacle = self.scenario.obstacles.pop(self.selected_obstacle)
+            self.selected_obstacle = None
+            label = f"O{obstacle.obstacle_id}"
+            message = (
+                f"{label} and its patrol path deleted"
+                if obstacle.patrol_waypoints
+                else f"{label} deleted"
+            )
+            self._commit_edit(message)
+        elif self.selected_robot is not None:
+            self.scenario.robots.pop(self.selected_robot)
+            self.selected_robot = None
+            self._commit_edit("Robot deleted")
+
     def paintEvent(self, event) -> None:
         del event
         painter = QPainter(self)
@@ -608,6 +644,27 @@ class ScenarioPlannerCanvas(FieldCanvas):
         painter.drawLine(centre + QPointF(-radius, -radius), centre + QPointF(radius, radius))
         painter.drawLine(centre + QPointF(-radius, radius), centre + QPointF(radius, -radius))
         painter.drawText(centre + QPointF(-8, -radius - 5), f"O{obstacle.obstacle_id}")
+        if obstacle.patrol_waypoints:
+            self._draw_patrol_loop(painter, obstacle, centre)
+
+    def _draw_patrol_loop(
+        self, painter: QPainter, obstacle: ScenarioObstacle, centre: QPointF
+    ) -> None:
+        """Draw the obstacle's patrol route as an open line from its spawn
+        point through each waypoint in order. The obstacle bounces back and
+        forth along this same line (see ``ResearchRuntime._tick_patrols``),
+        so there is no closing edge back to spawn or to the first waypoint.
+        """
+        waypoints = [self._to_screen(point) for point in obstacle.patrol_waypoints]
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor("#4fc3f7"), 2, Qt.DashLine))
+        route = [centre, *waypoints]
+        for first, second in zip(route, route[1:]):
+            painter.drawLine(first, second)
+        painter.setBrush(QColor("#4fc3f7"))
+        painter.setPen(Qt.NoPen)
+        for point in waypoints:
+            painter.drawEllipse(point, 5, 5)
 
     def _draw_planned_robot(
         self, painter: QPainter, robot: ScenarioRobot, index: int
@@ -810,6 +867,7 @@ class ScenarioPlannerPage(QWidget):
             ("obstacles", "△  Obstacles"),
             ("starting_pos", "○  Starting position"),
             ("target_pos", "×  Target position"),
+            ("patrol", "⟲  Patrol path"),
         ):
             button = QPushButton(label)
             button.setCheckable(True)
