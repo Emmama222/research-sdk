@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+prm planner, static scenario 'mixed' (8 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, mixed, prm planner ===
+  n = 60, failures = 0
+  time_ms    mean 11.38  sd 4.35  min 8.87  max 42.10
+  length_m   mean 8.79  sd 0.50  min 7.84  max 9.91
+  safety_m   mean 7.81  sd 2.83  min 2.98  max 16.63
+
+Saved 60 trial results to results/grsim_static_prm_mixed_n60.json

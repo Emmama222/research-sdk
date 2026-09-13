@@ -99,8 +99,15 @@ class VoronoiDijkstraPlanner:
         stay_in_field: bool = True,
         skip_direct_path: bool = False,
         record: StepRecorder | None = None,
+        search_key: object | None = None,
     ) -> PlanResult:
         """Return waypoints from *start_pos_mm* toward *target_pos_mm*.
+
+        ``search_key`` is accepted and ignored -- it's a calling-convention
+        parameter from the shared D* Lite search module on another branch
+        (paulk/dstar-lite-shared-search), not used by this planner's plain
+        Dijkstra search. Kept here only so callers written against that
+        branch's signature (e.g. ``drive_grsim.py``) don't crash on this one.
 
         When *stay_in_field* is True (default) the target is clamped to the
         field and all returned waypoints are validated to stay within it.

@@ -1,0 +1,16 @@
+Offline periodic_50ms (dynamic_scenario.py's trigger_periodic(1)), n=200, seed 0
+Reproduce: simulate() over SCENARIO_1/SCENARIO_2 with trigger=trigger_periodic(1),
+obstacle_speed_mps=1.0, robot_speed_mps=1.5, for all three PLANNER_NAMES.
+
+This is the exact offline mechanism drive_grsim.py's --trigger always reproduces live:
+replan every single 50ms control tick, unconditionally. CONTROL_TICK_S=0.05 in both scripts.
+
+--- scenario 1 (7 obstacles), wall clock 665.7s ---
+PRM+Dijkstra:              arrived 200/200, replans 76.67,  nav_s 3.83,  collisions 1.29, reversals 11.98
+VisibilityGraph+Dijkstra:  arrived 200/200, replans 58.08,  nav_s 2.90,  collisions 1.77, reversals 0.10
+Voronoi+Dijkstra:          arrived  17/200, replans 559.13, nav_s 27.96, collisions 1.51, reversals 318.58
+
+--- scenario 2 (5 obstacles), wall clock 386.8s ---
+PRM+Dijkstra:              arrived 200/200, replans 62.84,  nav_s 3.13,  collisions 0.68, reversals 6.73
+VisibilityGraph+Dijkstra:  arrived 200/200, replans 53.75,  nav_s 2.68,  collisions 1.01, reversals 0.04
+Voronoi+Dijkstra:          arrived   1/200, replans 597.32, nav_s 29.87, collisions 1.04, reversals 361.12

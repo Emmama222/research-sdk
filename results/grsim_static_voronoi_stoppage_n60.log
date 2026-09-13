@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+voronoi planner, static scenario 'stoppage' (7 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, stoppage, voronoi planner ===
+  n = 60, failures = 0
+  time_ms    mean 3.65  sd 0.47  min 3.32  max 6.12
+  length_m   mean 6.20  sd 0.00  min 6.20  max 6.20
+  safety_m   mean 9.48  sd 0.00  min 9.48  max 9.48
+
+Saved 60 trial results to results/grsim_static_voronoi_stoppage_n60.json

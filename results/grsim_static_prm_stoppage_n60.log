@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+prm planner, static scenario 'stoppage' (7 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, stoppage, prm planner ===
+  n = 60, failures = 0
+  time_ms    mean 10.91  sd 5.45  min 7.92  max 50.85
+  length_m   mean 5.37  sd 1.24  min 4.28  max 12.38
+  safety_m   mean 7.00  sd 1.50  min 3.80  max 10.39
+
+Saved 60 trial results to results/grsim_static_prm_stoppage_n60.json

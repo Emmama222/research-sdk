@@ -241,8 +241,15 @@ def plan(
     polygon_sides: int = VISIBILITY_POLYGON_SIDES,
     skip_direct_path: bool = False,
     record: StepRecorder | None = None,
+    search_key: object | None = None,
 ) -> PlanResult:
     """Plan a path with a Minkowski-inflated visibility graph + Dijkstra.
+
+    ``search_key`` is accepted and ignored -- it's a calling-convention
+    parameter from the shared D* Lite search module on another branch
+    (paulk/dstar-lite-shared-search), not used by this planner's plain
+    Dijkstra search. Kept here only so callers written against that
+    branch's signature (e.g. ``drive_grsim.py``) don't crash on this one.
 
     Builds one inflated polygon per obstacle, connects every pair of
     mutually-visible vertices (across all polygons, plus start and goal) with

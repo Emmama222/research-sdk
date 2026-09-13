@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+visibility planner, static scenario 'sampling' (15 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, sampling, visibility planner ===
+  n = 60, failures = 0
+  time_ms    mean 43.75  sd 4.12  min 40.57  max 70.69
+  length_m   mean 8.64  sd 0.00  min 8.64  max 8.64
+  safety_m   mean 23.10  sd 0.00  min 23.10  max 23.10
+
+Saved 60 trial results to results/grsim_static_visibility_sampling_n60.json

@@ -1,0 +1,76 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+prm planner, scenario 2 (5 obstacles at 1.0 m/s), always trigger, robot 1.5 m/s
+Running 60 discrete trials, seed 0, 30s timeout each.
+
+  sample 1/60: arrived=True  replans=181 nav_s= 9.47 collisions=0 reversals=35
+  sample 2/60: arrived=True  replans=144 nav_s= 8.57 collisions=3 reversals=29
+  sample 3/60: arrived=True  replans=132 nav_s= 8.49 collisions=2 reversals=28
+  sample 4/60: arrived=True  replans=104 nav_s= 5.25 collisions=0 reversals=26
+  sample 5/60: arrived=True  replans=150 nav_s= 8.38 collisions=2 reversals=14
+  sample 6/60: arrived=True  replans=154 nav_s= 8.38 collisions=1 reversals=41
+  sample 7/60: arrived=True  replans= 81 nav_s= 4.35 collisions=1 reversals=3
+  sample 8/60: arrived=True  replans=192 nav_s=12.10 collisions=3 reversals=46
+  sample 9/60: arrived=True  replans=193 nav_s=11.49 collisions=1 reversals=47
+  sample 10/60: arrived=True  replans=136 nav_s= 7.90 collisions=0 reversals=23
+  sample 11/60: arrived=True  replans=147 nav_s= 8.34 collisions=3 reversals=17
+  sample 12/60: arrived=True  replans=152 nav_s= 8.65 collisions=1 reversals=29
+  sample 13/60: arrived=True  replans=135 nav_s= 8.15 collisions=3 reversals=25
+  sample 14/60: arrived=True  replans=176 nav_s=10.00 collisions=2 reversals=28
+  sample 15/60: arrived=True  replans=167 nav_s=10.26 collisions=3 reversals=36
+  sample 16/60: arrived=True  replans=258 nav_s=14.96 collisions=4 reversals=38
+  sample 17/60: arrived=True  replans=259 nav_s=15.79 collisions=5 reversals=21
+  sample 18/60: arrived=True  replans=166 nav_s= 9.81 collisions=1 reversals=24
+  sample 19/60: arrived=True  replans=182 nav_s=10.77 collisions=0 reversals=45
+  sample 20/60: arrived=True  replans= 82 nav_s= 4.34 collisions=0 reversals=6
+  sample 21/60: arrived=True  replans=238 nav_s=14.03 collisions=4 reversals=50
+  sample 22/60: arrived=True  replans=183 nav_s=10.75 collisions=2 reversals=32
+  sample 23/60: arrived=True  replans=178 nav_s=11.42 collisions=2 reversals=28
+  sample 24/60: arrived=True  replans=286 nav_s=17.78 collisions=4 reversals=50
+  sample 25/60: arrived=True  replans= 90 nav_s= 5.02 collisions=4 reversals=10
+  sample 26/60: arrived=True  replans=283 nav_s=17.24 collisions=5 reversals=62
+  sample 27/60: arrived=True  replans=185 nav_s=11.59 collisions=3 reversals=43
+  sample 28/60: arrived=True  replans=296 nav_s=18.68 collisions=2 reversals=78
+  sample 29/60: arrived=True  replans=169 nav_s=10.74 collisions=1 reversals=30
+  sample 30/60: arrived=True  replans=155 nav_s= 9.05 collisions=3 reversals=26
+  sample 31/60: arrived=True  replans=302 nav_s=18.98 collisions=2 reversals=69
+  sample 32/60: arrived=True  replans=124 nav_s= 7.56 collisions=1 reversals=22
+  sample 33/60: arrived=True  replans=115 nav_s= 6.55 collisions=1 reversals=5
+  sample 34/60: arrived=True  replans=169 nav_s= 9.83 collisions=3 reversals=23
+  sample 35/60: arrived=True  replans= 89 nav_s= 5.15 collisions=2 reversals=9
+  sample 36/60: arrived=True  replans=135 nav_s= 7.87 collisions=2 reversals=24
+  sample 37/60: arrived=True  replans=142 nav_s= 9.11 collisions=1 reversals=22
+  sample 38/60: arrived=True  replans=112 nav_s= 6.62 collisions=1 reversals=12
+  sample 39/60: arrived=True  replans=153 nav_s= 9.30 collisions=1 reversals=2
+  sample 40/60: arrived=True  replans=115 nav_s= 6.55 collisions=1 reversals=15
+  sample 41/60: arrived=True  replans=159 nav_s= 9.69 collisions=2 reversals=15
+  sample 42/60: arrived=True  replans=106 nav_s= 6.23 collisions=1 reversals=9
+  sample 43/60: arrived=True  replans=143 nav_s= 8.35 collisions=0 reversals=24
+  sample 44/60: arrived=True  replans=121 nav_s= 6.77 collisions=1 reversals=16
+  sample 45/60: arrived=True  replans=148 nav_s= 8.38 collisions=1 reversals=22
+  sample 46/60: arrived=True  replans=153 nav_s= 8.77 collisions=1 reversals=9
+  sample 47/60: arrived=True  replans=130 nav_s= 7.08 collisions=2 reversals=6
+  sample 48/60: arrived=True  replans=164 nav_s= 8.86 collisions=0 reversals=41
+  sample 49/60: arrived=True  replans=107 nav_s= 6.21 collisions=3 reversals=9
+  sample 50/60: arrived=True  replans=117 nav_s= 6.61 collisions=2 reversals=16
+  sample 51/60: arrived=True  replans= 69 nav_s= 3.94 collisions=1 reversals=1
+  sample 52/60: arrived=True  replans=151 nav_s= 8.64 collisions=1 reversals=24
+  sample 53/60: arrived=True  replans=112 nav_s= 6.22 collisions=4 reversals=9
+  sample 54/60: arrived=True  replans=188 nav_s=12.55 collisions=2 reversals=27
+  sample 55/60: arrived=True  replans=158 nav_s=10.10 collisions=1 reversals=9
+  sample 56/60: arrived=True  replans=215 nav_s=13.93 collisions=3 reversals=14
+  sample 57/60: arrived=True  replans=145 nav_s= 9.39 collisions=1 reversals=14
+  sample 58/60: arrived=True  replans=133 nav_s= 8.37 collisions=2 reversals=4
+  sample 59/60: arrived=True  replans=118 nav_s= 7.57 collisions=2 reversals=7
+  sample 60/60: arrived=True  replans=139 nav_s= 8.01 collisions=1 reversals=18
+
+=== live grSim, scenario 2, prm planner, always trigger ===
+  n = 60 trials (60 requested), obstacles 1.0 m/s, robot 1.5 m/s
+  arrived 60/60
+  replans    mean 158.10  sd  52.40  min  69.00  max 302.00
+  nav s      mean   9.42  sd   3.40  min   3.94  max  18.98
+  collisions mean   1.85  sd   1.26  min   0.00  max   5.00
+  reversals  mean  24.45  sd  16.50  min   1.00  max  78.00
+
+Saved 60 trial results to results/grsim_notrigger_prm_s2_n60.json

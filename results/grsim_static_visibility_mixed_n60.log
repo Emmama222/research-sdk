@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+visibility planner, static scenario 'mixed' (8 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, mixed, visibility planner ===
+  n = 60, failures = 0
+  time_ms    mean 12.44  sd 4.50  min 10.60  max 45.13
+  length_m   mean 7.75  sd 0.00  min 7.75  max 7.75
+  safety_m   mean 2.86  sd 0.00  min 2.86  max 2.86
+
+Saved 60 trial results to results/grsim_static_visibility_mixed_n60.json

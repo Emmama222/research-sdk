@@ -1,0 +1,14 @@
+[Multicast] joining 224.5.23.2 on 0.0.0.0
+[Multicast] joined 224.5.23.2 on 0.0.0.0
+
+visibility planner, static scenario 'stoppage' (7 obstacles, stationary)
+Running 60 calls, live-detected obstacle positions.
+
+
+=== live grSim static, stoppage, visibility planner ===
+  n = 60, failures = 0
+  time_ms    mean 9.38  sd 2.61  min 7.58  max 23.81
+  length_m   mean 3.97  sd 0.00  min 3.97  max 3.97
+  safety_m   mean 4.20  sd 0.00  min 4.20  max 4.21
+
+Saved 60 trial results to results/grsim_static_visibility_stoppage_n60.json
