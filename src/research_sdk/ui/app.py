@@ -72,6 +72,7 @@ from research_sdk.ui.session import (
     discover_planners,
     export_planner_results,
 )
+from research_sdk.ui.sim_control import SimulatorControl
 from research_sdk.world.map.voronoi.voronoi_generator import generate_bounded_voronoi_map
 from research_sdk.world.scene import PlanningObstacle
 
@@ -1387,6 +1388,10 @@ class ResearchConsole(QMainWindow):
         map_action.toggled.connect(self.execution_page.canvas.setVisible)
         map_action.toggled.connect(self.scenario_planner_page.canvas.setVisible)
         toolbar.addAction(map_action)
+        toolbar.addSeparator()
+        self.simulator_control = SimulatorControl(self)
+        toolbar.addAction(self.simulator_control.action)
+        toolbar.addWidget(self.simulator_control.status)
 
     def _build_experiment_page(self) -> None:
         self.live_canvas = FieldCanvas()
@@ -2006,6 +2011,7 @@ class ResearchConsole(QMainWindow):
         self.runtime.stop_execution()
         if self.display_vision_thread is not None:
             self.display_vision_thread.stop()
+        self.simulator_control.shutdown()
         if self.recorder is not None:
             if not self.recorder.closed:
                 self.recorder.finish(completed=False)

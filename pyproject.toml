@@ -24,6 +24,7 @@ dev = ["pytest>=8.0", "ruff>=0.6", "grpcio-tools>=1.60"]
 
 [project.scripts]
 research-sdk-headless = 'research_sdk.headless:main'
+research-sdk-sim = 'research_sdk.sim.__main__:main'
 research-sdk-ui = "research_sdk.ui.app:main"
 
 [build-system]

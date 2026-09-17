@@ -1,5 +1,6 @@
 # Docs
 
+- [builtin-simulator.md](builtin-simulator.md) — lightweight grSim-compatible simulator the console can run itself
 - [physics.md](physics.md) — native grSim/ODE validation, setup, and recorded evidence
 
 [Graphify](../GRAPHIFY.md) provides visual maps of the system flow, package
