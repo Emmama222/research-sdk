@@ -1,0 +1,23 @@
+diff --git a/src/configwidget.cpp b/src/configwidget.cpp
+--- a/src/configwidget.cpp
++++ b/src/configwidget.cpp
+@@ -161,1 +161,2 @@
+-    world=VarXML::read(world,(QDir::homePath() + QString("/.grsim.xml")).toStdString());
++    const QString researchConfig = qEnvironmentVariable("RESEARCH_GRSIM_CONFIG");
++    world=VarXML::read(world,(researchConfig.isEmpty() ? QDir::homePath() + QString("/.grsim.xml") : researchConfig).toStdString());
+@@ -176,1 +177,1 @@
+-    if (grSim_launch_from_system_dir)
++    if (grSim_launch_from_system_dir || !qEnvironmentVariableIsEmpty("RESEARCH_GRSIM_CONFIG"))
+@@ -216,1 +217,2 @@
+-    VarXML::write(world,(QDir::homePath() + QString("/.grsim.xml")).toStdString());
++    if (qEnvironmentVariableIsEmpty("RESEARCH_GRSIM_CONFIG"))
++        VarXML::write(world,(QDir::homePath() + QString("/.grsim.xml")).toStdString());
+@@ -243,1 +245,1 @@
+-    if (grSim_launch_from_system_dir)
++    if (grSim_launch_from_system_dir || !qEnvironmentVariableIsEmpty("RESEARCH_GRSIM_CONFIG"))
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -119,1 +119,1 @@
+-    GIT_TAG           origin/jpfeltracco/build_static
++    GIT_TAG           5853b6df05f801e8f2b9684b57731d056b383b86

@@ -2,6 +2,28 @@
 
 This is a tool set that would provide the basics to perform further development and evaluation. 
 
+## Project map
+
+See [GRAPHIFY.md](GRAPHIFY.md) for visual maps of the system flow, package
+dependencies, planner family, and execution lifecycle.
+
+## Fast headless simulation
+
+Run scenarios without Qt, UDP, or a grSim window and export raw plus aggregated
+research results:
+
+    research-sdk-headless scenarios/crowded.json --planner all --trials 10
+
+See [docs/headless.md](docs/headless.md) for the simulation model, metrics,
+batch options, and Python API.
+
+For native grSim/ODE physics validation, see [docs/physics.md](docs/physics.md).
+After building the engine in WSL, run from PowerShell:
+
+```powershell
+.\scripts\physics.ps1 scenarios/crowded.json --planner all
+```
+
 Current Project available : 
 - Path Planning System Comparison (2026) 
 
