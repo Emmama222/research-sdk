@@ -369,6 +369,8 @@ class VisibilityGraphPlanner:
     def _gated_plan(self, planner_input: PlannerInput) -> PlannerOutput:
         robot_key = (bool(planner_input.is_yellow), int(planner_input.robot_id))
         state = self._state_by_robot.setdefault(robot_key, RouteState())
+        if planner_input.robot_reached_current_waypoint:
+            state.waypoints = state.waypoints[1:]
         start = (float(planner_input.current_pose[0]), float(planner_input.current_pose[1]))
         target = (float(planner_input.target_pose[0]), float(planner_input.target_pose[1]))
         heading = (
@@ -406,7 +408,9 @@ class VisibilityGraphPlanner:
         request = _plan_request_from_planner_input(planner_input)
         result = plan(request, **self._plan_kwargs)
         output = _planner_output_from_plan_result(planner_input, result)
-        commit_reroute(state, output.waypoints, target_pose)
+        # Result waypoints start at the robot's own position; the gate's
+        # "active segment" must be current position -> first real waypoint.
+        commit_reroute(state, output.waypoints[1:], target_pose)
         self._last_output_by_robot[robot_key] = output
         return output
 
