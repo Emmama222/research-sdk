@@ -510,3 +510,18 @@ def test_emergency_stop_attempts_every_robot_after_sender_failure() -> None:
     assert errors
     assert [command.robot_id for command in sender.commands] == [1, 2]
     assert runtime.active_paths == ()
+
+
+def test_reroute_gate_flag_reaches_the_planner_on_next_set_planner() -> None:
+    from research_sdk.planners import PRMPlanner, VisibilityGraphPlanner
+
+    runtime = ResearchRuntime()
+    assert runtime.use_reroute_gate is True
+    runtime.set_planner(VisibilityGraphPlanner)
+    assert runtime._planner.use_reroute_gate is True
+
+    runtime.use_reroute_gate = False
+    runtime.set_planner(PRMPlanner)
+    assert runtime._planner.use_reroute_gate is False
+    runtime.set_planner(None)
+    assert runtime._planner._manager.use_reroute_gate is False

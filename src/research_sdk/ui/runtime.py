@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from math import cos, hypot, sin
@@ -107,6 +108,23 @@ def waypoint_command(
     )
 
 
+def _accepts_use_reroute_gate(planner_cls: type) -> bool:
+    """Whether ``planner_cls(...)`` understands ``use_reroute_gate``.
+
+    ``set_planner`` stays generic over anything ``discover_planners()`` finds
+    (or a test double like ``_CapturingPlanner`` with a bare no-arg
+    constructor) -- only planners that actually declare the kwarg (or accept
+    ``**kwargs``) get it, everything else is constructed exactly as before.
+    """
+    try:
+        parameters = inspect.signature(planner_cls).parameters
+    except (TypeError, ValueError):
+        return False
+    return "use_reroute_gate" in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
 def planner_key(planner_cls: type | None) -> str | None:
     """Return the persistent identifier used by scenario obstacle layouts."""
     if planner_cls is None:
@@ -120,10 +138,14 @@ class ResearchRuntime:
         *,
         parallel_planning: bool = True,
         predict_motion: bool = False,
+        use_reroute_gate: bool = True,
+        scene_recompute_interval_s: float = 0.02,
         command_send_hz: float = 100.0,
         command_ttl_s: float = 0.2,
     ) -> None:
         self._sender: grSimSender | None = None
+        self._network_config_mtime: float | None = None
+        self._network_config_destination: tuple[str, int] | None = None
         self._command_dispatcher = RobotCommandDispatcher(
             lambda command: self._get_sender().send_robot_command(command),
             send_hz=command_send_hz,
@@ -159,6 +181,23 @@ class ResearchRuntime:
         # never destructive. See docs/decisions/0005-parallel-planner-
         # execution.md, "Future work".
         self.predict_motion = predict_motion
+        # Policy switch for A/B comparison: True (default) gates a planner's
+        # full reroute behind a cheap is_path_free check on its own active
+        # waypoint segment (see planners/reroute.py); False reproduces every
+        # planner's pre-extraction behaviour of always rerouting from scratch
+        # whenever the direct line to the target isn't clear.
+        self.use_reroute_gate = use_reroute_gate
+        # Same cheap-check-first philosophy as the reroute gate above, applied
+        # to the vision pipeline: rebuilding the planning scene (per-obstacle
+        # predicted-position/dynamic-radius math) on every single vision frame
+        # is wasted work between frames close enough together that nothing
+        # meaningful changed. Only actually rebuild it once this much time has
+        # passed; reuse the last one otherwise. The UI also renders this scene,
+        # so it must keep refreshing even while motion prediction is disabled;
+        # in that mode it is rebuilt with a zero prediction horizon.
+        self.scene_recompute_interval_s = scene_recompute_interval_s
+        self._last_scene_recompute_at: float | None = None
+        self._last_scene_predict_motion: bool | None = None
         self.world_pipeline = VisionWorldPipeline(cameras=4)
         self.active_paths: tuple[PlannedRobotPath, ...] = ()
         self._active_paths: dict[tuple[bool, int], PlannedRobotPath] = {}
@@ -172,8 +211,33 @@ class ResearchRuntime:
         ] = ()
 
     def ingest_vision_packet(self, packet) -> LiveWorldFrame | None:
-        """Update the runtime's world-state boundary from one vision packet."""
-        update = self.world_pipeline.ingest(packet)
+        """Update the runtime's world-state boundary from one vision packet.
+
+        The planning scene's prediction horizon tracks ``predict_motion``
+        directly: no horizon at all when motion prediction is off (a live
+        scene isn't even consulted for planning in that case -- see
+        ``_other_robot_obstacles`` -- so predicting into the future here
+        would be wasted work), and a short 50ms look-ahead when it's on.
+
+        The scene itself is only actually rebuilt at most once per
+        ``scene_recompute_interval_s`` (20ms baseline -- vision frames arrive
+        far faster than that). This applies in both modes because the UI
+        renders the latest scene even when planning does not consume it.
+        Every other call reuses ``world_pipeline.latest_scene`` untouched.
+        """
+        now = perf_counter()
+        compute_scene = (
+            self._last_scene_recompute_at is None
+            or self._last_scene_predict_motion is not self.predict_motion
+            or now - self._last_scene_recompute_at >= self.scene_recompute_interval_s
+        )
+        horizon_ms = 50.0 if self.predict_motion else 0.0
+        update = self.world_pipeline.ingest(
+            packet, horizon_ms=horizon_ms, compute_scene=compute_scene
+        )
+        if compute_scene and update is not None:
+            self._last_scene_recompute_at = now
+            self._last_scene_predict_motion = self.predict_motion
         self.last_pipeline_update = update
         return None if update is None else live_world_from_snapshot(update.snapshot)
 
@@ -356,6 +420,61 @@ class ResearchRuntime:
         self.last_plan_durations_ms = tuple(durations_ms)
         return tuple(paths)
 
+    def replan_active_robots(
+        self,
+        scenario: Scenario,
+        live_robots: dict[tuple[bool, int], LiveRobot],
+    ) -> dict[tuple[bool, int], PlannedRobotPath]:
+        """Re-evaluate the active (owning) planner's route for every robot
+        currently executing, from its *live* position rather than its
+        scenario ``start_mm``.
+
+        Calling this every vision frame is what makes the reroute gate in
+        ``planners/reroute.py`` actually reactive: most calls are cheap (the
+        gate's own ``is_path_free`` check on the active segment) and return
+        ``did_reroute=False``, so only robots whose route genuinely needs to
+        change end up in the returned mapping. One robot's replan failure
+        (planner exception) is logged-and-skipped here rather than raised,
+        matching ``_run_and_track``'s per-robot isolation -- a transient
+        failure on one robot must not stop this from being called again next
+        frame, or block every other robot's replan this frame.
+        """
+        changed: dict[tuple[bool, int], PlannedRobotPath] = {}
+        for robot in scenario.robots:
+            key = (robot.is_yellow, robot.robot_id)
+            if key not in self._active_paths:
+                continue
+            live = live_robots.get(key)
+            if live is None or robot.target_mm is None:
+                continue
+            obstacles = self._obstacles_for_robot(scenario, robot)
+            scene = PlanningScene(timestamp=perf_counter(), obstacles=obstacles)
+            try:
+                result = self._planner.plan(
+                    PlannerInput(
+                        robot_id=robot.robot_id,
+                        is_yellow=robot.is_yellow,
+                        current_pose=(*live.position_mm, live.orientation_rad),
+                        target_pose=(*robot.target_mm, robot.orientation_rad),
+                        scene=scene,
+                        record=self._recorder,
+                    )
+                )
+            except Exception:  # noqa: BLE001, S112 - one robot's replan failure must not skip the rest
+                continue
+            if not result.did_reroute:
+                continue
+            points = [live.position_mm, *[(p[0], p[1]) for p in result.waypoints]]
+            if points[-1] != robot.target_mm:
+                points.append(robot.target_mm)
+            new_path = PlannedRobotPath(robot.robot_id, robot.is_yellow, tuple(points))
+            self._active_paths[key] = new_path
+            self._waypoint_indices[key] = min(1, len(new_path.points_mm))
+            changed[key] = new_path
+        if changed:
+            self.active_paths = tuple(self._active_paths.values())
+        return changed
+
     def set_planner(self, planner_cls: type | None, *, record=None) -> None:
         """Swap the active planner, e.g. from the UI's "Active planner" dropdown.
 
@@ -372,10 +491,15 @@ class ResearchRuntime:
         """
         self._planner_key = planner_key(planner_cls)
         if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
-            self._planner = PlannerAPI()
+            self._planner = PlannerAPI(use_reroute_gate=self.use_reroute_gate)
             self._recorder = record
         else:
-            self._planner = planner_cls(**({"record": record} if record is not None else {}))
+            kwargs = {}
+            if record is not None:
+                kwargs["record"] = record
+            if _accepts_use_reroute_gate(planner_cls):
+                kwargs["use_reroute_gate"] = self.use_reroute_gate
+            self._planner = planner_cls(**kwargs)
             self._recorder = None
 
     def reset_planner(self) -> None:
@@ -559,9 +683,28 @@ class ResearchRuntime:
         return ConnectionProbe(sender.destination, (str(local_address[0]), int(local_address[1])))
 
     def _get_sender(self) -> grSimSender:
+        """Return the cached grSim command sender, rebuilding it only when
+        ``network_input.yaml`` actually changed.
+
+        This is on the command-dispatch hot path (up to ``command_send_hz``
+        per active robot -- 100/s by default), so re-reading and re-parsing
+        the YAML file on every call was a real, continuous cost for no
+        reason: the config only ever changes when someone edits it via the
+        Configurations tab. An mtime check (a cheap stat(), not a re-parse)
+        is what still lets that live edit take effect without paying full
+        file-read + YAML-parse cost on every single command.
+        """
         config_path = Path(__file__).resolve().parents[1] / "config" / "network_input.yaml"
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        destination = (str(config["grsim_command_ip"]), int(config["grsim_command_port"]))
+        mtime = config_path.stat().st_mtime
+        if self._network_config_mtime != mtime:
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            self._network_config_destination = (
+                str(config["grsim_command_ip"]),
+                int(config["grsim_command_port"]),
+            )
+            self._network_config_mtime = mtime
+        destination = self._network_config_destination
+        assert destination is not None
         if self._sender is None or self._sender.destination != destination:
             if self._sender is not None:
                 self._sender.close()
