@@ -35,6 +35,8 @@ class GeneratorConfig:
     min_gap_mm: float = 60.0
     jitter_mm: float = 150.0
     max_attempts: int = 2000
+    patrol_fraction: float = 0.0
+    patrol_points: int = 3
 
     def __post_init__(self) -> None:
         if self.robots < 1:
@@ -45,6 +47,10 @@ class GeneratorConfig:
             raise ValueError("robots + obstacles must fit in two 16-robot teams")
         if not 0.0 <= self.moving_fraction <= 1.0:
             raise ValueError("moving_fraction must be between 0 and 1")
+        if not 0.0 <= self.patrol_fraction <= 1.0:
+            raise ValueError("patrol_fraction must be between 0 and 1")
+        if self.patrol_points < 1:
+            raise ValueError("patrol_points must be at least 1")
         if not 0.0 <= self.min_obstacle_speed_mmps <= self.max_obstacle_speed_mmps:
             raise ValueError("obstacle speed range is invalid")
         if self.min_travel_mm < 0 or self.edge_margin_mm < 0 or self.jitter_mm < 0:
@@ -117,13 +123,22 @@ def random_scenario(
     ]
     moving = round(config.obstacles * config.moving_fraction)
     moving_ids = set(rng.sample(range(config.obstacles), moving))
+    patrolling = round(moving * config.patrol_fraction)
+    patrol_ids = set(rng.sample(sorted(moving_ids), patrolling))
     obstacles = []
     for i, point in enumerate(obstacle_points):
         # Yellow IDs 0-15 first, then the blue IDs not used by robots.
         is_yellow = i < MAX_ROBOTS_PER_TEAM
         obstacle_id = i if is_yellow else config.robots + i - MAX_ROBOTS_PER_TEAM
         velocity = (0.0, 0.0)
-        if i in moving_ids:
+        patrol: tuple[Point, ...] = ()
+        patrol_speed = 0.0
+        if i in patrol_ids:
+            patrol = tuple(_sample(rng, margin) for _ in range(config.patrol_points))
+            patrol_speed = round(
+                rng.uniform(config.min_obstacle_speed_mmps, config.max_obstacle_speed_mmps), 1
+            )
+        elif i in moving_ids:
             speed = rng.uniform(config.min_obstacle_speed_mmps, config.max_obstacle_speed_mmps)
             heading = rng.uniform(-pi, pi)
             velocity = (round(speed * cos(heading), 1), round(speed * sin(heading), 1))
@@ -134,6 +149,8 @@ def random_scenario(
                 position_mm=point,
                 radius_mm=ROBOT_RADIUS_MM,
                 velocity_mmps=velocity,
+                patrol_waypoints=patrol,
+                patrol_speed_mmps=patrol_speed,
             )
         )
     return Scenario(name=f"random-s{seed}-{index:04d}", robots=robots, obstacles=obstacles)
@@ -164,7 +181,13 @@ def perturb_scenario(
     margin = ROBOT_RADIUS_MM
 
     obstacles = [
-        replace(o, position_mm=_jitter(rng, o.position_mm, config.jitter_mm, margin))
+        replace(
+            o,
+            position_mm=_jitter(rng, o.position_mm, config.jitter_mm, margin),
+            patrol_waypoints=tuple(
+                _jitter(rng, p, config.jitter_mm, margin) for p in o.patrol_waypoints
+            ),
+        )
         for o in base.obstacles
     ]
     obstacle_points = [o.position_mm for o in obstacles]

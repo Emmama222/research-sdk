@@ -525,3 +525,24 @@ def test_reroute_gate_flag_reaches_the_planner_on_next_set_planner() -> None:
     assert runtime._planner.use_reroute_gate is False
     runtime.set_planner(None)
     assert runtime._planner._manager.use_reroute_gate is False
+
+
+def test_patrol_route_starts_at_spawn_and_respects_patrol_speed() -> None:
+    import pytest
+
+    scenario = Scenario(
+        "patrol",
+        robots=[],
+        obstacles=[ScenarioObstacle(2, True, (0.0, 0.0), 90.0,
+                                    patrol_waypoints=((3000.0, 0.0),), patrol_speed_mmps=500.0)],
+    )
+    runtime = ResearchRuntime()
+    sent = []
+    runtime._command_dispatcher.publish = sent.append
+    runtime.start_execution((), scenario=scenario)
+    assert runtime._patrol_paths[(True, 2)] == ((0.0, 0.0), (3000.0, 0.0))
+
+    runtime.execute_tick({(True, 2): LiveRobot(2, True, (0.0, 0.0), 0.0)})
+    command = sent[-1]
+    assert command.vx == pytest.approx(0.5)  # capped at the patrol speed, heading to waypoint
+    assert command.vy == pytest.approx(0.0)

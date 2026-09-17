@@ -47,7 +47,12 @@ from research_sdk.planners import (
     VoronoiDijkstraPlanner,
 )
 from research_sdk.scenario_generator import GeneratorConfig, perturb_scenario, random_scenario
-from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot
+from research_sdk.ui.scenarios import (
+    DEFAULT_PATROL_SPEED_MMPS,
+    Scenario,
+    ScenarioObstacle,
+    ScenarioRobot,
+)
 from research_sdk.world.scene import FieldDimensions, PlanningObstacle, PlanningScene
 
 Point = tuple[float, float]
@@ -144,6 +149,7 @@ class HeadlessRunResult:
     prediction_horizon_ms: float = 0.0
     planning_time_ms_p95_call: float = 0.0
     straight_line_mm: float = 0.0
+    replan_period_ms: float = 0.0
 
     def to_record(self) -> dict[str, str | bool | int | float | None]:
         return asdict(self)
@@ -457,7 +463,42 @@ def _reflect(value: float, low: float, high: float) -> tuple[float, float]:
     return low + 2.0 * span - offset, -1.0
 
 
+def patrol_route(obstacle: ScenarioObstacle) -> tuple[Point, ...]:
+    """Spawn point followed by the patrol waypoints (the line the UI draws)."""
+    if not obstacle.patrol_waypoints:
+        return ()
+    return (tuple(obstacle.position_mm), *(tuple(p) for p in obstacle.patrol_waypoints))
+
+
+def _patrol_state(obstacle: ScenarioObstacle, simulation_s: float) -> tuple[Point, Point]:
+    """Constant-speed back-and-forth along spawn -> w1 -> ... -> wn -> ... -> spawn."""
+    route = patrol_route(obstacle)
+    segments = [(a, b, _distance(a, b)) for a, b in pairwise(route)]
+    total = sum(length for _, _, length in segments)
+    speed = obstacle.patrol_speed_mmps or DEFAULT_PATROL_SPEED_MMPS
+    if total <= 0 or speed <= 0:
+        return route[0], (0.0, 0.0)
+    travelled = (speed * simulation_s) % (2.0 * total)
+    direction = 1.0
+    if travelled > total:
+        travelled = 2.0 * total - travelled
+        direction = -1.0
+    for start, end, length in segments:
+        if travelled <= length or (start, end, length) == segments[-1]:
+            ratio = 0.0 if length <= 0 else min(1.0, travelled / length)
+            ux = 0.0 if length <= 0 else (end[0] - start[0]) / length
+            uy = 0.0 if length <= 0 else (end[1] - start[1]) / length
+            return (
+                (start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio),
+                (direction * speed * ux, direction * speed * uy),
+            )
+        travelled -= length
+    return route[-1], (0.0, 0.0)  # pragma: no cover - loop always returns
+
+
 def _moving_obstacle_state(obstacle: ScenarioObstacle, simulation_s: float) -> tuple[Point, Point]:
+    if obstacle.patrol_waypoints:
+        return _patrol_state(obstacle, simulation_s)
     vx, vy = obstacle.velocity_mmps
     if vx == 0 and vy == 0:
         return obstacle.position_mm, (0.0, 0.0)
@@ -473,7 +514,7 @@ def _moving_obstacle_state(obstacle: ScenarioObstacle, simulation_s: float) -> t
 
 
 def _obstacle_position(obstacle: ScenarioObstacle, simulation_s: float) -> Point:
-    """Constant-speed motion that bounces off the field boundary."""
+    """Patrol back-and-forth, or constant velocity bouncing off the field boundary."""
     return _moving_obstacle_state(obstacle, simulation_s)[0]
 
 
@@ -666,6 +707,7 @@ def simulate(
         planning_time_ms_max_call=max(call_durations_ms, default=0.0),
         time_to_goal_ms=simulated_duration_ms if completed else None,
         prediction_horizon_ms=config.prediction_horizon_ms,
+        replan_period_ms=config.control_period_s * 1000.0,
         planning_time_ms_p95_call=_percentile(call_durations_ms, 0.95)
         if call_durations_ms
         else 0.0,
@@ -704,6 +746,7 @@ def run_experiments(
     scenario_sets: Sequence[str] | None = None,
     progress: bool = False,
     predictions_ms: Sequence[float] | None = None,
+    replan_periods_ms: Sequence[float] | None = None,
 ) -> list[HeadlessRunResult]:
     """Run scenario x planner x policy x trial in stable order.
 
@@ -732,9 +775,18 @@ def run_experiments(
         if predictions_ms
         else (config.prediction_horizon_ms,)
     )
+    periods = (
+        tuple(float(p) for p in replan_periods_ms)
+        if replan_periods_ms
+        else (config.control_period_s * 1000.0,)
+    )
+    if any(not isfinite(p) or p <= 0 for p in periods):
+        raise ValueError("replan periods must be positive")
     if backend == "grsim":
         if any(policy != "once" for policy in policies) or any(predictions):
             raise ValueError("The grSim backend currently supports only --policy once")
+        if any(o.patrol_waypoints for s in scenarios for o in s.obstacles):
+            raise ValueError("The grSim backend does not drive patrol obstacles yet")
         from research_sdk.grsim_physics import simulate_physics
 
         return [
@@ -760,7 +812,12 @@ def run_experiments(
         (
             scenario,
             planner_name,
-            replace(config, replan_policy=policy, prediction_horizon_ms=horizon),
+            replace(
+                config,
+                replan_policy=policy,
+                prediction_horizon_ms=horizon,
+                control_period_s=period / 1000.0,
+            ),
             trial,
             seed + trial - 1,
             label,
@@ -769,8 +826,10 @@ def run_experiments(
         for planner_name in planners
         for policy in policies
         for horizon in predictions
-        # Prediction cannot change a plan-once run (all velocities are zero at t=0).
-        if not (policy == "once" and horizon > 0 and 0.0 in predictions)
+        for period in periods
+        # Plan-once never replans, so the replan period cannot change it; and
+        # with a no-prediction arm present its prediction variants are skipped.
+        if not (policy == "once" and (period != periods[0] or (horizon > 0 and 0.0 in predictions)))
         for trial in range(1, trials + 1)
     ]
     step = max(1, len(jobs) // 20)
@@ -813,11 +872,13 @@ def summarize_results(
             result.planner,
             _policy_label(result),
             result.backend,
+            result.prediction_horizon_ms,
+            result.replan_period_ms,
         )
         groups.setdefault(key, []).append(result)
 
     summaries = []
-    for (scenario, planner, policy, backend), runs in groups.items():
+    for (scenario, planner, policy, backend, horizon, period), runs in groups.items():
         planning = [run.planning_time_ms_total for run in runs]
         per_call = [run.planning_time_ms_mean for run in runs]
         wall = [run.wall_time_ms for run in runs]
@@ -832,6 +893,8 @@ def summarize_results(
                 "scenario": scenario,
                 "planner": planner,
                 "replan_policy": policy,
+                "prediction_horizon_ms": horizon,
+                "replan_period_ms": round(period, 3),
                 "backend": backend,
                 "physics_validation_passes": sum(run.physics_validation_passed for run in runs),
                 "runs": len(runs),
@@ -910,6 +973,9 @@ def write_results(
         "seeds": sorted({result.seed for result in results}),
         "replan_policies": sorted({result.replan_policy for result in results}),
         "prediction_horizons_ms": sorted({result.prediction_horizon_ms for result in results}),
+        "replan_periods_ms": sorted({round(r.replan_period_ms, 3) for r in results}),
+        "patrol_model": "constant speed back-and-forth along spawn + patrol_waypoints "
+        f"(default {DEFAULT_PATROL_SPEED_MMPS:g} mm/s)",
         "prediction_model": "constant velocity; circle moved to predicted position and "
         "radius grown by predicted travel (WorldMap / Obstacle.dynamic_radius_0)",
         "scenario_sets": sorted({result.scenario_set or result.scenario for result in results}),
@@ -1018,7 +1084,23 @@ def _parser() -> argparse.ArgumentParser:
         help="Obstacle motion-prediction horizon(s) in ms (default 0 = off)",
     )
     parser.add_argument(
+        "--replan-ms",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Replanning period(s) in ms, e.g. 20 50 100 200 (default: 1000/--control-hz)",
+    )
+    parser.add_argument(
         "--random", type=int, default=0, help="Add N seeded random scenarios"
+    )
+    parser.add_argument(
+        "--patrol-fraction",
+        type=float,
+        default=0.0,
+        help="Random: share of moving obstacles that patrol waypoints instead of drifting",
+    )
+    parser.add_argument(
+        "--patrol-points", type=int, default=3, help="Random: waypoints per patrol route"
     )
     parser.add_argument(
         "--perturb", type=int, default=0, help="Add N jittered variants of each saved scenario"
@@ -1066,6 +1148,8 @@ def _build_cases(args) -> tuple[list[Scenario], list[str], GeneratorConfig]:
         robots=args.robots,
         obstacles=args.obstacles,
         moving_fraction=args.moving_fraction,
+        patrol_fraction=args.patrol_fraction,
+        patrol_points=args.patrol_points,
         min_obstacle_speed_mmps=args.obstacle_speed[0],
         max_obstacle_speed_mmps=args.obstacle_speed[1],
         jitter_mm=args.jitter_mm,
@@ -1129,7 +1213,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if any(h < 0 for h in args.predict_ms):
             raise ValueError("--predict-ms must be non-negative")
-        total = len(scenarios) * len(planners) * len(policies) * len(args.predict_ms) * args.trials
+        periods = args.replan_ms or [1000.0 / args.control_hz]
+        total = (
+            len(scenarios) * len(planners) * len(policies)
+            * len(args.predict_ms) * len(periods) * args.trials
+        )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
             f" x {len(policies)} policies x {args.trials} trials on {workers} worker(s)",
@@ -1149,6 +1237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scenario_sets=labels,
             progress=True,
             predictions_ms=args.predict_ms,
+            replan_periods_ms=args.replan_ms,
         )
         write_results(
             results,
@@ -1162,6 +1251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "perturbed_per_saved": args.perturb,
                 "saved_included": not args.no_saved,
                 "control_hz": args.control_hz,
+                "replan_periods_ms_requested": periods,
             },
         )
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
@@ -1175,11 +1265,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     for summary in summarize_results(results):
         print(
-            "{} / {} / {}: {:.0%} complete, {:.0%} collision-free, {:.1f} replans, "
+            "{} / {} / {} @ {:g} ms: {:.0%} complete, {:.0%} collision-free, {:.1f} replans, "
             "{:.1f} ms planning/run (median), {:.0f}x real time".format(
                 summary["scenario"],
                 summary["planner"],
                 summary["replan_policy"],
+                summary["replan_period_ms"],
                 summary["completion_rate"],
                 summary["collision_free_rate"],
                 summary["replans_mean"],

@@ -17,7 +17,7 @@ from research_sdk.network.grSimPacketFactory import grSimPacketFactory
 from research_sdk.network.robot_command import RobotCommand
 from research_sdk.network.ssl_sockets import grSimSender
 from research_sdk.planners import PlannerAPI, PlannerInput, VoronoiDijkstraPlanner
-from research_sdk.ui.scenarios import Scenario
+from research_sdk.ui.scenarios import DEFAULT_PATROL_SPEED_MMPS, Scenario
 from research_sdk.world.pipeline import VisionWorldPipeline, WorldPipelineUpdate
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
 from research_sdk.world.snapshot import WorldSnapshot
@@ -91,12 +91,17 @@ def waypoint_command(
     target_mm: tuple[float, float],
     *,
     gain_per_second: float = 2.0,
+    max_speed_mps: float | None = None,
 ) -> RobotCommand:
     """Create a grSim robot-local velocity command toward a world-frame point."""
     error_x_m = (target_mm[0] - robot.position_mm[0]) / 1000.0
     error_y_m = (target_mm[1] - robot.position_mm[1]) / 1000.0
     world_vx = gain_per_second * error_x_m
     world_vy = gain_per_second * error_y_m
+    speed = hypot(world_vx, world_vy)
+    if max_speed_mps is not None and speed > max_speed_mps > 0:
+        world_vx *= max_speed_mps / speed
+        world_vy *= max_speed_mps / speed
     heading = robot.orientation_rad
     local_vx = cos(heading) * world_vx + sin(heading) * world_vy
     local_vy = -sin(heading) * world_vx + cos(heading) * world_vy
@@ -205,6 +210,7 @@ class ResearchRuntime:
         self._patrol_paths: dict[tuple[bool, int], tuple[tuple[float, float], ...]] = {}
         self._patrol_indices: dict[tuple[bool, int], int] = {}
         self._patrol_directions: dict[tuple[bool, int], int] = {}
+        self._patrol_speeds: dict[tuple[bool, int], float] = {}
         self._paused = False
         self._step_mode = False
         self._step_boundary_indices: dict[tuple[bool, int], int] = {}
@@ -528,8 +534,21 @@ class ResearchRuntime:
                     self._waypoint_indices[key] = max(
                         0, min(int(index), len(self._active_paths[key].points_mm))
                     )
+        # Same route the canvases draw and the headless runner uses: spawn
+        # point, then each waypoint, retraced back and forth.
         self._patrol_paths = {
-            (obstacle.is_yellow, obstacle.obstacle_id): obstacle.patrol_waypoints
+            (obstacle.is_yellow, obstacle.obstacle_id): (
+                tuple(obstacle.position_mm),
+                *obstacle.patrol_waypoints,
+            )
+            for obstacle in (scenario.obstacles if scenario is not None else ())
+            if obstacle.patrol_waypoints
+        }
+        self._patrol_speeds = {
+            (obstacle.is_yellow, obstacle.obstacle_id): (
+                obstacle.patrol_speed_mmps or DEFAULT_PATROL_SPEED_MMPS
+            )
+            / 1000.0
             for obstacle in (scenario.obstacles if scenario is not None else ())
             if obstacle.patrol_waypoints
         }
@@ -609,7 +628,9 @@ class ResearchRuntime:
                 index += direction
                 self._patrol_indices[key] = index
                 target = waypoints[index]
-            self._command_dispatcher.publish(waypoint_command(robot, target))
+            self._command_dispatcher.publish(
+                waypoint_command(robot, target, max_speed_mps=self._patrol_speeds.get(key))
+            )
 
     def execute_tick(self, live_robots: dict[tuple[bool, int], LiveRobot]) -> bool:
         """Send one control tick and return True when every path has arrived."""

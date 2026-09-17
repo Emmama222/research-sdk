@@ -183,3 +183,93 @@ def test_prediction_is_rejected_on_grsim_backend() -> None:
         run_experiments(
             [_crossing_scenario()], ["voronoi"], backend="grsim", predictions_ms=[250.0]
         )
+
+
+def test_patrol_obstacle_goes_back_and_forth_along_spawn_and_waypoints() -> None:
+    from research_sdk.headless import _obstacle_velocity
+
+    obstacle = ScenarioObstacle(
+        0, True, (0.0, 0.0), 90.0, patrol_waypoints=((1000.0, 0.0), (1000.0, 500.0)),
+        patrol_speed_mmps=500.0,
+    )
+    # route length 1500 mm at 500 mm/s: out in 3 s, back in 3 s
+    assert _obstacle_position(obstacle, 0.0) == pytest.approx((0.0, 0.0))
+    assert _obstacle_position(obstacle, 1.0) == pytest.approx((500.0, 0.0))
+    assert _obstacle_position(obstacle, 2.5) == pytest.approx((1000.0, 250.0))
+    assert _obstacle_velocity(obstacle, 2.5) == pytest.approx((0.0, 500.0))
+    assert _obstacle_position(obstacle, 3.5) == pytest.approx((1000.0, 250.0))
+    assert _obstacle_velocity(obstacle, 3.5) == pytest.approx((0.0, -500.0))
+    assert _obstacle_position(obstacle, 6.0) == pytest.approx((0.0, 0.0))
+    assert _obstacle_position(obstacle, 7.0) == pytest.approx((500.0, 0.0))
+
+
+def test_patrol_scenarios_round_trip_through_json() -> None:
+    scenario = Scenario(
+        "patrol",
+        robots=[ScenarioRobot(0, False, (-2000.0, 0.0), (2000.0, 0.0))],
+        obstacles=[ScenarioObstacle(1, True, (0.0, 1500.0), 90.0,
+                                    patrol_waypoints=((0.0, -1500.0),), patrol_speed_mmps=900.0)],
+    )
+    loaded = Scenario.from_dict(json.loads(json.dumps(scenario.to_dict())))
+    assert loaded.obstacles[0].patrol_waypoints == ((0.0, -1500.0),)
+    assert loaded.obstacles[0].patrol_speed_mmps == 900.0
+    # an old file without the new keys still loads
+    legacy = scenario.to_dict()
+    del legacy["obstacles"][0]["patrol_waypoints"], legacy["obstacles"][0]["patrol_speed_mmps"]
+    assert Scenario.from_dict(legacy).obstacles[0].patrol_waypoints == ()
+
+
+def test_event_replanning_reacts_to_a_patrolling_obstacle() -> None:
+    scenario = Scenario(
+        "patrol-cross",
+        robots=[ScenarioRobot(0, False, (-2500.0, 0.0), (2500.0, 0.0))],
+        obstacles=[ScenarioObstacle(1, True, (0.0, 1500.0), 90.0,
+                                    patrol_waypoints=((0.0, -1500.0),), patrol_speed_mmps=1500.0)],
+    )
+    event = simulate(scenario, "voronoi", config=_config("event"))
+    assert event.completed
+    assert event.planner_calls > 1
+
+
+def test_random_patrol_generation_is_seeded() -> None:
+    config = GeneratorConfig(obstacles=8, moving_fraction=1.0, patrol_fraction=1.0, patrol_points=2)
+    first = random_scenario(3, seed=9, config=config)
+    assert first.to_dict() == random_scenario(3, seed=9, config=config).to_dict()
+    assert all(len(o.patrol_waypoints) == 2 for o in first.obstacles)
+    assert all(
+        config.min_obstacle_speed_mmps <= o.patrol_speed_mmps <= config.max_obstacle_speed_mmps
+        for o in first.obstacles
+    )
+    variant = perturb_scenario(first, 0, seed=1)
+    assert [len(o.patrol_waypoints) for o in variant.obstacles] == [2] * 8
+
+
+def test_replan_period_and_prediction_are_sweep_axes() -> None:
+    results = run_experiments(
+        [_crossing_scenario()],
+        ["prm"],
+        policies=["once", "event"],
+        predictions_ms=[0.0, 100.0],
+        replan_periods_ms=[20.0, 100.0],
+        config=SimulationConfig(max_simulation_s=20.0),
+    )
+    combos = sorted((r.replan_policy, r.prediction_horizon_ms, r.replan_period_ms) for r in results)
+    assert combos == [
+        ("event", 0.0, 20.0), ("event", 0.0, 100.0),
+        ("event", 100.0, 20.0), ("event", 100.0, 100.0),
+        ("once", 0.0, 20.0),
+    ]
+    slow = next(r for r in results if r.replan_policy == "event" and r.replan_period_ms == 100.0
+                and r.prediction_horizon_ms == 0.0)
+    fast = next(r for r in results if r.replan_policy == "event" and r.replan_period_ms == 20.0
+                and r.prediction_horizon_ms == 0.0)
+    assert slow.planner_calls < fast.planner_calls
+    rows = summarize_results(results)
+    assert {(row["prediction_horizon_ms"], row["replan_period_ms"]) for row in rows} == {
+        (0.0, 20.0), (0.0, 100.0), (100.0, 20.0), (100.0, 100.0)
+    }
+
+
+def test_invalid_replan_period_is_rejected() -> None:
+    with pytest.raises(ValueError, match="replan periods"):
+        run_experiments([_crossing_scenario()], ["prm"], replan_periods_ms=[0.0])
