@@ -300,7 +300,6 @@ class PRMPlanner:
     path (still clear, nothing rerouted) instead of resampling and rebuilding
     the whole roadmap on every single call. See ``planners/reroute.py``.
     """
-
     def __init__(
         self,
         *,
@@ -308,6 +307,7 @@ class PRMPlanner:
         periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
         **plan_kwargs,
     ) -> None:
+        plan_kwargs.setdefault("seed", None)
         self._plan_kwargs = plan_kwargs
         self.use_reroute_gate = use_reroute_gate
         self.periodic_reroute_frames = periodic_reroute_frames
