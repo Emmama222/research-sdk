@@ -48,8 +48,13 @@ The runner mirrors the current application at the behavioral boundary:
 5. Advance moving scenario obstacles from their configured linear velocity.
 6. Count robot-to-robot and robot-to-obstacle collision episodes.
 
-The virtual clock advances by *--dt-ms* without sleeping. The reported
-real-time factor is simulated duration divided by wall-clock runtime.
+The virtual clock always advances by *--dt-ms*. By default the runner does not
+sleep and therefore runs as fast as the host allows. The reported real-time
+factor is simulated duration divided by wall-clock runtime.
+`--time-scale 1|10|100|200|500` optionally adds wall-clock pacing to cap each
+kinematic run at the selected ratio without changing its virtual timestep or
+outcome. A target is not guaranteed when planning itself takes longer than the
+corresponding wall-clock budget.
 
 This is a point-kinematic research backend, not grSim rigid-body physics. It
 does not model wheel dynamics, acceleration, friction, ball contact, radio/UDP
@@ -92,6 +97,7 @@ path lengths, final error, and worst clearance.
 --seed N
 --dt-ms MILLISECONDS
 --max-sim-seconds SECONDS
+--time-scale 1|10|100|200|500     # omit for maximum throughput
 --speed-mps METRES_PER_SECOND
 --gain PER_SECOND
 --output-dir PATH

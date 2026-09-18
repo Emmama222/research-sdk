@@ -50,6 +50,7 @@ def test_simulator_uses_exactly_the_consoles_grsim_ports() -> None:
         "--vision-address", "224.5.23.2",
         "--vision-port", "10020",
         "--multicast-interface", "0.0.0.0",
+        "--time-scale", "1",
     ]
 
 
@@ -64,16 +65,25 @@ def test_toolbar_action_starts_and_stops_the_simulator(monkeypatch) -> None:
     parent = QWidget()
     fake = _FakeProcess()
     control = SimulatorControl(parent, process=fake)
+    assert [control.speed_selector.itemData(i) for i in range(control.speed_selector.count())] == [
+        1,
+        2,
+        5,
+    ]
+    control.speed_selector.setCurrentText("5x")
 
     control.action.setChecked(True)
     assert fake.running and fake.started_with[:2] == ["--command-host", "127.0.0.1"]
-    assert "running" in control.status.text()
+    assert fake.started_with[-2:] == ["--time-scale", "5"]
+    assert "5x target" in control.status.text()
+    assert not control.speed_selector.isEnabled()
     assert control.watchdog.isActive()
 
     control.action.setChecked(False)
     assert not fake.running
     assert control.status.text() == "Simulator: external"
     assert not control.watchdog.isActive()
+    assert control.speed_selector.isEnabled()
 
 
 def test_start_failure_unchecks_and_warns(monkeypatch) -> None:

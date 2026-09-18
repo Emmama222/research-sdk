@@ -14,15 +14,16 @@ from pathlib import Path
 import yaml
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QLabel, QMessageBox, QWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QMessageBox, QWidget
 
 from research_sdk.sim.manager import SimulatorProcess
+from research_sdk.sim.server import TIME_SCALES
 
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "network_input.yaml"
 _LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 
 
-def simulator_args_from_config(config: Mapping) -> list[str]:
+def simulator_args_from_config(config: Mapping, time_scale: int = 1) -> list[str]:
     """Translate ``network_input.yaml`` into ``research_sdk.sim`` arguments.
 
     The console sends commands to ``grsim_command_ip:grsim_command_port`` and
@@ -46,6 +47,8 @@ def simulator_args_from_config(config: Mapping) -> list[str]:
         str(int(config["grsim_vision_port"])),
         "--multicast-interface",
         str(config.get("multicast_interface_ip", "0.0.0.0")),
+        "--time-scale",
+        str(time_scale),
     ]
 
 
@@ -63,6 +66,12 @@ class SimulatorControl(QObject):
         )
         self.action.toggled.connect(self._toggled)
         self.status = QLabel("Simulator: external")
+        self.speed_selector = QComboBox(parent)
+        self.speed_selector.setToolTip(
+            "Target virtual-time speed. Select before starting; use 1x for final validation."
+        )
+        for scale in TIME_SCALES:
+            self.speed_selector.addItem(f"{scale}x", scale)
         self.watchdog = QTimer(self)
         self.watchdog.setInterval(1000)
         self.watchdog.timeout.connect(self._check_alive)
@@ -82,7 +91,8 @@ class SimulatorControl(QObject):
             return True
         try:
             config = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8"))
-            self.process.start(simulator_args_from_config(config))
+            time_scale = int(self.speed_selector.currentData())
+            self.process.start(simulator_args_from_config(config, time_scale))
         except (OSError, ValueError, RuntimeError, KeyError) as exc:
             self._set_checked(False)
             self.status.setText("Simulator: failed to start")
@@ -94,7 +104,8 @@ class SimulatorControl(QObject):
             )
             return False
         self._set_checked(True)
-        self.status.setText("Simulator: built-in (running)")
+        self.speed_selector.setEnabled(False)
+        self.status.setText(f"Simulator: built-in ({time_scale}x target)")
         self.watchdog.start()
         self.state_changed.emit(True)
         return True
@@ -103,6 +114,7 @@ class SimulatorControl(QObject):
         self.watchdog.stop()
         self.process.stop()
         self._set_checked(False)
+        self.speed_selector.setEnabled(True)
         self.status.setText("Simulator: external")
         self.state_changed.emit(False)
 

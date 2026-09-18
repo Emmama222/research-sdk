@@ -143,6 +143,37 @@ def _free_udp_port() -> int:
         return sock.getsockname()[1]
 
 
+def test_server_time_scale_advances_fixed_step_physics_faster_than_wall_time() -> None:
+    server = SimServer(
+        ServerConfig(
+            command_port=0,
+            vision_address="127.0.0.1",
+            vision_port=_free_udp_port(),
+            time_scale=5,
+        ),
+        SimConfig(robots_per_team=0),
+    )
+    started = time.perf_counter()
+    try:
+        server.run(duration_s=0.05)
+    finally:
+        server.close()
+
+    wall_s = time.perf_counter() - started
+    assert wall_s >= 0.04
+    assert server.world.time_s >= 0.12
+
+
+def test_server_rejects_non_positive_time_scale() -> None:
+    with pytest.raises(ValueError, match="time_scale"):
+        ServerConfig(time_scale=0)
+
+
+def test_server_rejects_time_scale_above_ui_maximum() -> None:
+    with pytest.raises(ValueError, match="one of"):
+        ServerConfig(time_scale=10)
+
+
 def test_server_round_trip_through_the_sdk_sender_and_vision_pipeline() -> None:
     vision_port = _free_udp_port()
     receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

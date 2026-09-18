@@ -53,6 +53,54 @@ def test_timeout_is_reported_on_virtual_clock() -> None:
     assert result.simulated_duration_ms == pytest.approx(100.0)
 
 
+def test_time_scale_caps_headless_virtual_time_rate() -> None:
+    result = simulate(
+        _straight_scenario(),
+        "visibility",
+        config=SimulationConfig(max_simulation_s=10.0, time_scale=100),
+    )
+
+    assert result.completed
+    assert result.wall_time_ms >= result.simulated_duration_ms / 110.0
+    assert result.realtime_factor <= 110.0
+
+
+def test_time_scale_does_not_change_virtual_outcome_or_cadence() -> None:
+    unpaced = simulate(
+        _straight_scenario(),
+        "visibility",
+        config=SimulationConfig(max_simulation_s=10.0),
+    )
+    paced = simulate(
+        _straight_scenario(),
+        "visibility",
+        config=SimulationConfig(max_simulation_s=10.0, time_scale=500),
+    )
+
+    virtual_fields = (
+        "status",
+        "completed",
+        "ticks",
+        "simulated_duration_ms",
+        "time_to_goal_ms",
+        "planner_calls",
+        "replan_count",
+        "collision_episodes",
+        "travelled_distance_mm",
+        "mean_final_error_mm",
+        "dt_ms",
+        "replan_period_ms",
+    )
+    assert {name: getattr(paced, name) for name in virtual_fields} == {
+        name: getattr(unpaced, name) for name in virtual_fields
+    }
+
+
+def test_headless_rejects_non_positive_time_scale() -> None:
+    with pytest.raises(ValueError, match="time_scale"):
+        SimulationConfig(time_scale=0)
+
+
 def test_collision_episode_is_not_counted_once_per_tick() -> None:
     scenario = Scenario(
         "overlap",

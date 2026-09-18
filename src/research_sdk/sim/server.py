@@ -6,11 +6,17 @@ import socket
 import struct
 import time
 from dataclasses import dataclass
+from math import isfinite
 
 from research_sdk.sim.engine import SimConfig, SimWorld
 
 DEFAULT_VISION_GROUP = "224.5.23.2"
 READY_MARKER = "[sim] ready"
+# The live Qt controller runs at 20 wall-clock Hz and vision is published at
+# 60 wall-clock Hz.  Larger scales let a repeated velocity command cover many
+# simulated seconds before feedback can correct it; use headless for >5x.
+TIME_SCALES = (1, 2, 5)
+_MAX_PHYSICS_STEPS_PER_CYCLE = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,12 +29,17 @@ class ServerConfig:
     vision_hz: float = 60.0
     physics_hz: float = 240.0
     geometry_every_frames: int = 60
+    time_scale: float = 1.0
 
     def __post_init__(self) -> None:
         if self.vision_hz <= 0 or self.physics_hz <= 0:
             raise ValueError("vision_hz and physics_hz must be positive")
         if self.physics_hz < self.vision_hz:
             raise ValueError("physics_hz must be at least vision_hz")
+        if not isfinite(self.time_scale) or self.time_scale <= 0:
+            raise ValueError("time_scale must be finite and positive")
+        if self.time_scale not in TIME_SCALES:
+            raise ValueError(f"time_scale must be one of {TIME_SCALES}")
         for port in (self.command_port, self.vision_port):
             if not 0 <= port <= 65535:
                 raise ValueError(f"invalid UDP port {port}")
@@ -98,6 +109,7 @@ class SimServer:
     def run(self, duration_s: float | None = None) -> None:
         cfg = self.config
         physics_dt = 1.0 / cfg.physics_hz
+        physics_wall_dt = physics_dt / cfg.time_scale
         vision_dt = 1.0 / cfg.vision_hz
         start = time.perf_counter()
         next_physics = start
@@ -110,12 +122,12 @@ class SimServer:
                     break
                 self.drain_commands(now)
                 steps = 0
-                while next_physics <= now and steps < 16:  # cap catch-up after stalls
-                    self.world.step(physics_dt, next_physics)
-                    next_physics += physics_dt
+                while next_physics <= now and steps < _MAX_PHYSICS_STEPS_PER_CYCLE:
+                    # Physics always uses the original fixed timestep.  ``now`` remains
+                    # wall time so command expiry is not shortened by fast-forwarding.
+                    self.world.step(physics_dt, now)
+                    next_physics += physics_wall_dt
                     steps += 1
-                if next_physics <= now:
-                    next_physics = now + physics_dt
                 if next_vision <= now:
                     self.publish_frame(time.time())
                     next_vision += vision_dt

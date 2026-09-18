@@ -17,6 +17,7 @@ from research_sdk.sim.engine import SimConfig
 from research_sdk.sim.server import (
     DEFAULT_VISION_GROUP,
     READY_MARKER,
+    TIME_SCALES,
     ServerConfig,
     SimServer,
 )
@@ -24,7 +25,7 @@ from research_sdk.sim.server import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Lightweight grSim-compatible simulator (kinematic, real time)."
+        description="Lightweight grSim-compatible simulator (kinematic, accelerated time)."
     )
     parser.add_argument("--command-host", default="127.0.0.1")
     parser.add_argument("--command-port", type=int, default=GRSIM_COMMAND_PORT)
@@ -37,6 +38,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--multicast-interface", default=MULTICAST_INTERFACE_IP)
     parser.add_argument("--vision-hz", type=float, default=60.0)
     parser.add_argument("--physics-hz", type=float, default=240.0)
+    parser.add_argument(
+        "--time-scale",
+        type=int,
+        choices=TIME_SCALES,
+        default=1,
+        help="Target simulated-time multiplier (default: 1; use headless above 5x)",
+    )
     parser.add_argument("--robots-per-team", type=int, default=6)
     parser.add_argument("--noise-mm", type=float, default=0.0)
     parser.add_argument("--seed", type=int, default=0)
@@ -70,6 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 multicast_interface=args.multicast_interface,
                 vision_hz=args.vision_hz,
                 physics_hz=args.physics_hz,
+                time_scale=args.time_scale,
             ),
             SimConfig(
                 robots_per_team=args.robots_per_team,
@@ -92,7 +101,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     host, port = server.command_address
     print(
         f"{READY_MARKER} commands on {host}:{port}, vision to "
-        f"{args.vision_address}:{args.vision_port} at {args.vision_hz:g} Hz",
+        f"{args.vision_address}:{args.vision_port} at {args.vision_hz:g} Hz, "
+        f"target {args.time_scale}x",
         flush=True,
     )
     try:

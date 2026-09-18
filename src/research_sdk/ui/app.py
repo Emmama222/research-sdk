@@ -1303,6 +1303,8 @@ class ResearchConsole(QMainWindow):
         self.addToolBar(toolbar)
         self.simulator_control = SimulatorControl(self)
         toolbar.addAction(self.simulator_control.action)
+        toolbar.addWidget(QLabel("Speed:"))
+        toolbar.addWidget(self.simulator_control.speed_selector)
         toolbar.addWidget(self.simulator_control.status)
 
     def _start_live_grsim_display(self) -> None:

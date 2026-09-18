@@ -37,7 +37,7 @@ from itertools import pairwise
 from math import atan2, hypot, isfinite, pi, sqrt
 from pathlib import Path
 from statistics import fmean, median
-from time import perf_counter
+from time import perf_counter, sleep
 
 from research_sdk.config import (
     ROBOT_MAX_LINEAR_SPEED_MPS,
@@ -67,6 +67,8 @@ RobotKey = tuple[bool, int]
 PLANNER_NAMES = ("voronoi", "prm", "visibility")
 REPLAN_POLICIES = ("once", "cycle", "event", "event_route")
 NEAR_MISS_MM = 50.0
+TIME_SCALE_CHOICES = (1, 10, 100, 200, 500)
+_PACING_INTERVAL_WALL_S = 0.01
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,8 @@ class SimulationConfig:
     # None means "use config/planner_variables.yaml for the planner being run".
     planning_clearance_mm: float | None = None
     prediction_horizon_ms: float = 0.0
+    # None preserves the original unpaced, maximum-throughput behavior.
+    time_scale: float | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -110,6 +114,10 @@ class SimulationConfig:
             raise ValueError("planning_clearance_mm must be finite and non-negative")
         if self.periodic_reroute_frames is not None and self.periodic_reroute_frames < 1:
             raise ValueError("periodic_reroute_frames must be at least 1 or None")
+        if self.time_scale is not None and (
+            not isfinite(self.time_scale) or self.time_scale <= 0
+        ):
+            raise ValueError("time_scale must be finite and positive, or None for unpaced")
 
 
 @dataclass(frozen=True, slots=True)
@@ -702,6 +710,13 @@ def _collisions(
     return robot_pairs, obstacle_pairs, min(clearances) if clearances else None
 
 
+def _pace_virtual_clock(simulation_s: float, wall_started: float, time_scale: float) -> None:
+    """Prevent virtual time from running ahead of the selected wall-time ratio."""
+    delay_s = wall_started + simulation_s / time_scale - perf_counter()
+    if delay_s > 0:
+        sleep(delay_s)
+
+
 def simulate(
     scenario: Scenario,
     planner_name: str,
@@ -755,6 +770,11 @@ def simulate(
     minimum_clearance_mm: float | None = None
     simulation_s = 0.0
     next_control_s = 0.0
+    next_pace_s = (
+        config.time_scale * _PACING_INTERVAL_WALL_S
+        if config.time_scale is not None
+        else None
+    )
     first_cycle = True
     ticks = 0
 
@@ -855,6 +875,9 @@ def simulate(
             state.position = position
         simulation_s += step_s
         ticks += 1
+        if next_pace_s is not None and simulation_s + 1e-9 >= next_pace_s:
+            _pace_virtual_clock(simulation_s, wall_started, config.time_scale)
+            next_pace_s = simulation_s + config.time_scale * _PACING_INTERVAL_WALL_S
 
     failed_states = [state for state in states if state.failed]
     successful_paths_done = all(
@@ -868,8 +891,10 @@ def simulate(
         for state in states
         if state.robot.target_mm is not None
     ]
-    wall_time_ms = (perf_counter() - wall_started) * 1000.0
     simulated_duration_ms = simulation_s * 1000.0
+    if config.time_scale is not None:
+        _pace_virtual_clock(simulation_s, wall_started, config.time_scale)
+    wall_time_ms = (perf_counter() - wall_started) * 1000.0
     realtime_factor = simulated_duration_ms / wall_time_ms if wall_time_ms > 0 else 0.0
     failed_robots = ",".join(
         f"Y{state.robot.robot_id}" if state.robot.is_yellow else f"B{state.robot.robot_id}"
@@ -1018,6 +1043,8 @@ def run_experiments(
     if any(c is not None and (not isfinite(c) or c < 0) for c in clearances):
         raise ValueError("planning clearances must be non-negative")
     if backend == "grsim":
+        if config.time_scale is not None:
+            raise ValueError("time_scale is supported only by the kinematic backend")
         if any(policy != "once" for policy in policies) or any(predictions):
             raise ValueError("The grSim backend currently supports only --policy once")
         if any(o.patrol_waypoints for s in scenarios for o in s.obstacles):
@@ -1314,6 +1341,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Virtual timeout per run",
     )
     parser.add_argument(
+        "--time-scale",
+        type=int,
+        choices=TIME_SCALE_CHOICES,
+        default=None,
+        help="Cap kinematic runs at 1x, 10x, 100x, 200x, or 500x (default: unpaced)",
+    )
+    parser.add_argument(
         "--speed-mps",
         type=float,
         default=ROBOT_MAX_LINEAR_SPEED_MPS,
@@ -1480,6 +1514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             control_period_s=1.0 / args.control_hz,
             periodic_reroute_frames=args.periodic_frames,
             planning_clearance_mm=None if args.clearance_mm is None else args.clearance_mm[0],
+            time_scale=args.time_scale,
         )
         output_folder = args.output_dir or _default_output_folder()
         if output_folder.exists() and any(output_folder.iterdir()):
@@ -1499,7 +1534,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
-            f" x {len(policies)} policies x {args.trials} trials on {workers} worker(s)",
+            f" x {len(policies)} policies x {args.trials} trials on {workers} worker(s)"
+            f" at {f'{args.time_scale}x cap' if args.time_scale else 'maximum speed'}",
             flush=True,
         )
         results = run_experiments(

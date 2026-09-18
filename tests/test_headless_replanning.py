@@ -358,3 +358,35 @@ def test_event_route_policy_runs_for_every_planner(planner_name: str) -> None:
     result = simulate(_crossing_scenario(), planner_name, config=_config("event_route"))
     assert result.completed
     assert result.replan_policy == "event_route"
+
+
+def test_planning_clearance_comes_from_config_and_can_be_overridden(monkeypatch) -> None:
+    import research_sdk.config as config_module
+    from research_sdk.config import planning_clearance_mm as clearance_for
+
+    assert clearance_for("voronoi") == clearance_for(None) == config_module.PLANNING_CLEARANCE_MM
+    monkeypatch.setattr(config_module, "PLANNING_CLEARANCE_MM", 25.0)
+    monkeypatch.setitem(config_module._CLEARANCE_BY_PLANNER, "prm", 70.0)
+    assert clearance_for(None) == 25.0
+    assert clearance_for("voronoi") == 25.0  # no per-planner entry: shared value
+    assert clearance_for("PRMPlanner") == 70.0
+    assert clearance_for("research_sdk.planners.PRM.prm_dijkstra.PRMPlanner") == 70.0
+
+
+def test_clearance_is_recorded_and_sweepable() -> None:
+    results = run_experiments(
+        [_crossing_scenario()],
+        ["visibility"],
+        policies=["event"],
+        clearances_mm=[0.0, 60.0],
+        config=SimulationConfig(max_simulation_s=20.0),
+    )
+    assert sorted(r.planning_clearance_mm for r in results) == [0.0, 60.0]
+    assert all(r.completed for r in results)
+    rows = summarize_results(results)
+    assert {row["planning_clearance_mm"] for row in rows} == {0.0, 60.0}
+
+
+def test_negative_clearance_is_rejected() -> None:
+    with pytest.raises(ValueError, match="clearances must be non-negative"):
+        run_experiments([_crossing_scenario()], ["prm"], clearances_mm=[-1.0])
