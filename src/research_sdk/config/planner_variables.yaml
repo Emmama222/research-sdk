@@ -1,3 +1,11 @@
+# Planning clearance added to (robot radius + obstacle radius) by every planner,
+# in millimetres. Set a per-planner value to override the shared one; leave a
+# per-planner value empty to fall back to planning_clearance_mm.
+planning_clearance_mm: 0.0
+voronoi_clearance_mm:
+prm_clearance_mm:
+visibility_clearance_mm:
+
 # Voronoi path-planning defaults.
 voronoi_boundary_inset_mm: 100.0
 voronoi_density_percent: 10.0

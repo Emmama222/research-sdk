@@ -1,4 +1,7 @@
-"""Analyse a prediction-horizon x replan-period sweep (runs.csv).
+"""Analyse a planner-setting sweep (runs.csv).
+
+Sweepable settings: prediction horizon, replan period and planning clearance.
+The two that actually vary in the batch become the heatmap axes.
 
 Usage:
     python scripts/analyse_sweep.py results/acra-sweep-patrol
@@ -39,13 +42,33 @@ ORANGES = LinearSegmentedColormap.from_list(
     "seq_orange", ["#fde4d8", "#f7b397", "#f18a60", "#eb6834", "#c24f1f", "#943a14", "#6b290c"]
 )
 INK, INK_2 = "#0b0b0b", "#52514e"
-POLICY_TITLE = {"event": "Event-triggered replanning", "cycle": "Time-triggered replanning"}
+POLICY_TITLE = {"event": "Event-triggered replanning", "cycle": "Time-triggered replanning",
+                "event_route": "Event-triggered (full-route check)"}
+SETTINGS = ["prediction_horizon_ms", "replan_period_ms", "planning_clearance_mm"]
+AXIS_LABEL = {
+    "prediction_horizon_ms": "Prediction horizon (ms)",
+    "replan_period_ms": "Replan period (ms)",
+    "planning_clearance_mm": "Planning clearance (mm)",
+}
+
+
+def axes_of(table: pd.DataFrame) -> tuple[str, str]:
+    """The two swept settings to plot: (rows, columns)."""
+    varying = [c for c in SETTINGS if c in table and table[c].nunique() > 1]
+    if len(varying) >= 2:
+        return varying[0], varying[1]
+    if len(varying) == 1:
+        other = next(c for c in SETTINGS if c != varying[0] and c in table)
+        return other, varying[0]
+    return SETTINGS[0], SETTINGS[1]
 
 
 def load(folder: Path) -> tuple[pd.DataFrame, list]:
     runs = pd.read_csv(folder / "runs.csv")
     runs["collision_free"] = runs["collision_episodes"] == 0
     runs["replan_period_ms"] = runs["replan_period_ms"].round(3)
+    if "planning_clearance_mm" not in runs:
+        runs["planning_clearance_mm"] = 0.0
     failed = runs.loc[runs["status"] == "planning_failed", ["scenario", "planner"]]
     failed_keys = set(map(tuple, failed.drop_duplicates().values))
     keep = [(s, p) not in failed_keys for s, p in zip(runs["scenario"], runs["planner"])]
@@ -54,7 +77,7 @@ def load(folder: Path) -> tuple[pd.DataFrame, list]:
 
 def grid(runs: pd.DataFrame, policy: str) -> pd.DataFrame:
     sub = runs[runs.replan_policy == policy]
-    g = sub.groupby(["planner", "prediction_horizon_ms", "replan_period_ms"])
+    g = sub.groupby(["planner", *SETTINGS])
     out = pd.DataFrame(
         {
             "n": g.size(),
@@ -92,9 +115,9 @@ def best_configs(table: pd.DataFrame, policy: str) -> pd.DataFrame:
 
 def paired_event_vs_cycle(runs: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     rows, stats = [], {}
-    keys = ["planner", "prediction_horizon_ms", "replan_period_ms"]
+    keys = ["planner", *SETTINGS]
     both = runs[runs.replan_policy.isin(["event", "cycle"])]
-    for (planner, horizon, period), sub in both.groupby(keys):
+    for (planner, horizon, period, clearance), sub in both.groupby(keys):
         wide = sub.pivot_table(
             index="scenario", columns="replan_policy",
             values=["planning_time_ms_total", "collision_free"], aggfunc="first",
@@ -111,6 +134,7 @@ def paired_event_vs_cycle(runs: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
                 "planner": planner,
                 "prediction_horizon_ms": horizon,
                 "replan_period_ms": period,
+                "planning_clearance_mm": clearance,
                 "scenarios": len(wide),
                 "cycle_over_event_planning_time_median": float((pt["cycle"] / pt["event"]).median()),
                 "collision_free_event_%": 100 * cf["event"].mean(),
@@ -156,22 +180,21 @@ def heatmaps(table: pd.DataFrame, policy: str, path: Path) -> None:
     planners = [p for p in PLANNERS if p in set(table.planner)]
     fig, axes = plt.subplots(2, len(planners), figsize=(3.3 * len(planners), 5.6),
                              constrained_layout=True, squeeze=False)
+    rows_axis, cols_axis = axes_of(table)
     safe_norm = Normalize(vmin=table["collision_free_%"].min(), vmax=100)
     positive = table["planning_ms_median"][table["planning_ms_median"] > 0]
     time_norm = LogNorm(vmin=max(positive.min(), 0.1), vmax=positive.max())
     for col, planner in enumerate(planners):
         sub = table[table.planner == planner]
-        safe = sub.pivot(index="prediction_horizon_ms", columns="replan_period_ms",
-                         values="collision_free_%")
-        cost = sub.pivot(index="prediction_horizon_ms", columns="replan_period_ms",
-                         values="planning_ms_median")
+        safe = sub.pivot_table(index=rows_axis, columns=cols_axis, values="collision_free_%")
+        cost = sub.pivot_table(index=rows_axis, columns=cols_axis, values="planning_ms_median")
         im1 = _heat(axes[0, col], safe, BLUES, safe_norm, "{:.0f}")
         im2 = _heat(axes[1, col], cost, ORANGES, time_norm, "{:.0f}")
         axes[0, col].set_title(PLANNER_LABEL[planner], fontsize=9, color=INK)
-        axes[1, col].set_xlabel("Replan period (ms)", fontsize=8, color=INK_2)
+        axes[1, col].set_xlabel(AXIS_LABEL[cols_axis], fontsize=8, color=INK_2)
         if col == 0:
-            axes[0, col].set_ylabel("Prediction horizon (ms)", fontsize=8, color=INK_2)
-            axes[1, col].set_ylabel("Prediction horizon (ms)", fontsize=8, color=INK_2)
+            axes[0, col].set_ylabel(AXIS_LABEL[rows_axis], fontsize=8, color=INK_2)
+            axes[1, col].set_ylabel(AXIS_LABEL[rows_axis], fontsize=8, color=INK_2)
     fig.colorbar(im1, ax=axes[0, :], shrink=0.85, label="Collision-free runs (%)")
     bar = fig.colorbar(im2, ax=axes[1, :], shrink=0.85, label="Planning time per run (ms, median)")
     ticks = [t for t in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)
@@ -190,7 +213,7 @@ def main(folder: Path) -> None:
     runs, excluded = load(folder)
     stats: dict = {"excluded_initial_plan_failures": [list(k) for k in excluded]}
     bests = []
-    for policy in ("event", "cycle"):
+    for policy in ("event", "event_route", "cycle"):
         if policy not in set(runs.replan_policy):
             continue
         table = grid(runs, policy)

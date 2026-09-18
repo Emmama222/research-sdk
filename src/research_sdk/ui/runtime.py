@@ -11,7 +11,7 @@ from time import perf_counter
 
 import yaml
 
-from research_sdk.config import ROBOT_RADIUS_MM
+from research_sdk.config import ROBOT_RADIUS_MM, planning_clearance_mm
 from research_sdk.network.command_dispatcher import RobotCommandDispatcher
 from research_sdk.network.grSimPacketFactory import grSimPacketFactory
 from research_sdk.network.robot_command import RobotCommand
@@ -192,6 +192,7 @@ class ResearchRuntime:
         # planner's pre-extraction behaviour of always rerouting from scratch
         # whenever the direct line to the target isn't clear.
         self.use_reroute_gate = use_reroute_gate
+        self.planning_clearance_mm = planning_clearance_mm()
         # Same cheap-check-first philosophy as the reroute gate above, applied
         # to the vision pipeline: rebuilding the planning scene (per-obstacle
         # predicted-position/dynamic-radius math) on every single vision frame
@@ -370,6 +371,7 @@ class ResearchRuntime:
                     current_pose=(*robot.start_mm, robot.orientation_rad),
                     target_pose=(*robot.target_mm, robot.orientation_rad),
                     scene=scene,
+                    clearance_mm=self.planning_clearance_mm,
                     record=self._recorder,
                 )
             )
@@ -466,6 +468,7 @@ class ResearchRuntime:
                         current_pose=(*live.position_mm, live.orientation_rad),
                         target_pose=(*robot.target_mm, robot.orientation_rad),
                         scene=scene,
+                        clearance_mm=self.planning_clearance_mm,
                         record=self._recorder,
                     )
                 )
@@ -499,6 +502,11 @@ class ResearchRuntime:
         construction time the way ``VisibilityGraphPlanner``/``PRMPlanner`` do.
         """
         self._planner_key = planner_key(planner_cls)
+        # Clearance follows the selected planner's config entry (the shared
+        # value unless planner_variables.yaml overrides it for that planner).
+        self.planning_clearance_mm = planning_clearance_mm(
+            None if planner_cls is None else planner_cls.__name__
+        )
         if planner_cls is None or planner_cls is VoronoiDijkstraPlanner:
             self._planner = PlannerAPI(use_reroute_gate=self.use_reroute_gate)
             self._recorder = record

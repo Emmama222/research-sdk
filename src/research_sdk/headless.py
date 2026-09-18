@@ -39,7 +39,11 @@ from pathlib import Path
 from statistics import fmean, median
 from time import perf_counter
 
-from research_sdk.config import ROBOT_MAX_LINEAR_SPEED_MPS, ROBOT_RADIUS_MM
+from research_sdk.config import (
+    ROBOT_MAX_LINEAR_SPEED_MPS,
+    ROBOT_RADIUS_MM,
+    planning_clearance_mm,
+)
 from research_sdk.exporters import CSVExporter, JSONExporter
 from research_sdk.planners import (
     PlannerAPI,
@@ -78,7 +82,8 @@ class SimulationConfig:
     replan_policy: str = "once"
     control_period_s: float = 1.0 / 60.0
     periodic_reroute_frames: int | None = None
-    planning_clearance_mm: float = 0.0
+    # None means "use config/planner_variables.yaml for the planner being run".
+    planning_clearance_mm: float | None = None
     prediction_horizon_ms: float = 0.0
 
     def __post_init__(self) -> None:
@@ -99,7 +104,9 @@ class SimulationConfig:
             )
         if not isfinite(self.prediction_horizon_ms) or self.prediction_horizon_ms < 0:
             raise ValueError("prediction_horizon_ms must be finite and non-negative")
-        if not isfinite(self.planning_clearance_mm) or self.planning_clearance_mm < 0:
+        if self.planning_clearance_mm is not None and (
+            not isfinite(self.planning_clearance_mm) or self.planning_clearance_mm < 0
+        ):
             raise ValueError("planning_clearance_mm must be finite and non-negative")
         if self.periodic_reroute_frames is not None and self.periodic_reroute_frames < 1:
             raise ValueError("periodic_reroute_frames must be at least 1 or None")
@@ -150,6 +157,7 @@ class HeadlessRunResult:
     planning_time_ms_max_call: float = 0.0
     time_to_goal_ms: float | None = None
     prediction_horizon_ms: float = 0.0
+    planning_clearance_mm: float = 0.0
     planning_time_ms_p95_call: float = 0.0
     straight_line_mm: float = 0.0
     replan_period_ms: float = 0.0
@@ -175,6 +183,12 @@ class HeadlessRunResult:
     minimum_robot_clearance_mm: float | None = None
     minimum_obstacle_clearance_mm: float | None = None
     contact_time_ms: float = 0.0
+    # Fault attribution for robot-vs-obstacle contacts, decided at the first tick
+    # of each episode (see _obstacle_initiated). Patrol obstacles follow a fixed,
+    # time-based route and never react to robots, so an episode the obstacle
+    # closed on its own could not have been avoided by replanning.
+    obstacle_episodes_obstacle_initiated: int = 0
+    obstacle_episodes_robot_initiated: int = 0
 
     def to_record(self) -> dict[str, str | bool | int | float | None]:
         return asdict(self)
@@ -620,6 +634,35 @@ def _obstacle_velocity(obstacle: ScenarioObstacle, simulation_s: float) -> Point
     return _moving_obstacle_state(obstacle, simulation_s)[1]
 
 
+def _obstacle_initiated(
+    robot_position: Point,
+    robot_velocity: Point,
+    obstacle: ScenarioObstacle,
+    simulation_s: float,
+) -> bool:
+    """True when the obstacle, not the robot, closed the gap into contact.
+
+    ``normal`` points from the obstacle to the robot, so projecting the
+    obstacle's velocity onto it gives the rate at which the obstacle approaches
+    the robot, and negating the robot's projection gives the rate at which the
+    robot approaches the obstacle. Whichever is larger is charged with the
+    contact. Patrol obstacles ignore robots entirely, so obstacle-initiated
+    episodes are not attributable to the planner.
+    """
+    obstacle_position = _obstacle_position(obstacle, simulation_s)
+    separation = _distance(robot_position, obstacle_position)
+    if separation < 1e-9:
+        return False
+    normal = (
+        (robot_position[0] - obstacle_position[0]) / separation,
+        (robot_position[1] - obstacle_position[1]) / separation,
+    )
+    obstacle_velocity = _obstacle_velocity(obstacle, simulation_s)
+    obstacle_closing = obstacle_velocity[0] * normal[0] + obstacle_velocity[1] * normal[1]
+    robot_closing = -(robot_velocity[0] * normal[0] + robot_velocity[1] * normal[1])
+    return obstacle_closing > robot_closing
+
+
 def _collisions(
     states: Sequence[_RobotState],
     obstacles: Sequence[ScenarioObstacle],
@@ -675,6 +718,8 @@ def simulate(
     if trial < 1:
         raise ValueError("trial must be at least 1")
     config = config or SimulationConfig()
+    if config.planning_clearance_mm is None:
+        config = replace(config, planning_clearance_mm=planning_clearance_mm(planner_name))
     policy = config.replan_policy
     wall_started = perf_counter()
     planner = _new_planner(planner_name, seed, policy, config.periodic_reroute_frames)
@@ -701,6 +746,12 @@ def simulate(
     active_obstacle_collisions: set[tuple[RobotKey, RobotKey]] = set()
     robot_collision_episodes = 0
     obstacle_collision_episodes = 0
+    obstacle_episodes_obstacle_initiated = 0
+    obstacle_episodes_robot_initiated = 0
+    state_by_key = {state.key: state for state in states}
+    obstacle_by_key = {
+        (obstacle.is_yellow, obstacle.obstacle_id): obstacle for obstacle in obstacles
+    }
     minimum_clearance_mm: float | None = None
     simulation_s = 0.0
     next_control_s = 0.0
@@ -752,8 +803,23 @@ def simulate(
         current_robot, current_obstacle, clearance = _collisions(
             states, obstacles, simulation_s, split=split_clearance
         )
+        new_obstacle_contacts = current_obstacle - active_obstacle_collisions
         robot_collision_episodes += len(current_robot - active_robot_collisions)
-        obstacle_collision_episodes += len(current_obstacle - active_obstacle_collisions)
+        obstacle_collision_episodes += len(new_obstacle_contacts)
+        for robot_key, obstacle_key in new_obstacle_contacts:
+            contact_state = state_by_key.get(robot_key)
+            contact_obstacle = obstacle_by_key.get(obstacle_key)
+            if contact_state is None or contact_obstacle is None:
+                continue
+            if _obstacle_initiated(
+                contact_state.position,
+                contact_state.velocity_mmps,
+                contact_obstacle,
+                simulation_s,
+            ):
+                obstacle_episodes_obstacle_initiated += 1
+            else:
+                obstacle_episodes_robot_initiated += 1
         active_robot_collisions = current_robot
         active_obstacle_collisions = current_obstacle
         if clearance is not None:
@@ -845,6 +911,7 @@ def simulate(
         planning_time_ms_max_call=max(call_durations_ms, default=0.0),
         time_to_goal_ms=simulated_duration_ms if completed else None,
         prediction_horizon_ms=config.prediction_horizon_ms,
+        planning_clearance_mm=config.planning_clearance_mm,
         replan_period_ms=config.control_period_s * 1000.0,
         planning_time_ms_p95_call=_percentile(call_durations_ms, 0.95)
         if call_durations_ms
@@ -869,6 +936,8 @@ def simulate(
         minimum_robot_clearance_mm=split_clearance.get("robot"),
         minimum_obstacle_clearance_mm=split_clearance.get("obstacle"),
         contact_time_ms=contact_time_s * 1000.0,
+        obstacle_episodes_obstacle_initiated=obstacle_episodes_obstacle_initiated,
+        obstacle_episodes_robot_initiated=obstacle_episodes_robot_initiated,
         straight_line_mm=sum(
             _distance(state.robot.start_mm, state.robot.target_mm)
             for state in states
@@ -905,6 +974,7 @@ def run_experiments(
     progress: bool = False,
     predictions_ms: Sequence[float] | None = None,
     replan_periods_ms: Sequence[float] | None = None,
+    clearances_mm: Sequence[float] | None = None,
 ) -> list[HeadlessRunResult]:
     """Run scenario x planner x policy x trial in stable order.
 
@@ -940,6 +1010,13 @@ def run_experiments(
     )
     if any(not isfinite(p) or p <= 0 for p in periods):
         raise ValueError("replan periods must be positive")
+    clearances: tuple[float | None, ...] = (
+        tuple(float(c) for c in clearances_mm)
+        if clearances_mm
+        else (config.planning_clearance_mm,)
+    )
+    if any(c is not None and (not isfinite(c) or c < 0) for c in clearances):
+        raise ValueError("planning clearances must be non-negative")
     if backend == "grsim":
         if any(policy != "once" for policy in policies) or any(predictions):
             raise ValueError("The grSim backend currently supports only --policy once")
@@ -975,6 +1052,7 @@ def run_experiments(
                 replan_policy=policy,
                 prediction_horizon_ms=horizon,
                 control_period_s=period / 1000.0,
+                planning_clearance_mm=clearance,
             ),
             trial,
             seed + trial - 1,
@@ -985,6 +1063,7 @@ def run_experiments(
         for policy in policies
         for horizon in predictions
         for period in periods
+        for clearance in clearances
         # Plan-once never replans, so the replan period cannot change it; and
         # with a no-prediction arm present its prediction variants are skipped.
         if not (policy == "once" and (period != periods[0] or (horizon > 0 and 0.0 in predictions)))
@@ -1042,11 +1121,12 @@ def summarize_results(
             result.backend,
             result.prediction_horizon_ms,
             result.replan_period_ms,
+            result.planning_clearance_mm,
         )
         groups.setdefault(key, []).append(result)
 
     summaries = []
-    for (scenario, planner, policy, backend, horizon, period), runs in groups.items():
+    for (scenario, planner, policy, backend, horizon, period, clearance), runs in groups.items():
         planning = [run.planning_time_ms_total for run in runs]
         per_call = [run.planning_time_ms_mean for run in runs]
         wall = [run.wall_time_ms for run in runs]
@@ -1063,6 +1143,7 @@ def summarize_results(
                 "replan_policy": policy,
                 "prediction_horizon_ms": horizon,
                 "replan_period_ms": round(period, 3),
+                "planning_clearance_mm": clearance,
                 "backend": backend,
                 "physics_validation_passes": sum(run.physics_validation_passed for run in runs),
                 "runs": len(runs),
@@ -1166,6 +1247,7 @@ def write_results(
         "replan_policies": sorted({result.replan_policy for result in results}),
         "prediction_horizons_ms": sorted({result.prediction_horizon_ms for result in results}),
         "replan_periods_ms": sorted({round(r.replan_period_ms, 3) for r in results}),
+        "planning_clearances_mm": sorted({r.planning_clearance_mm for r in results}),
         "patrol_model": "constant speed back-and-forth along spawn + patrol_waypoints "
         f"(default {DEFAULT_PATROL_SPEED_MMPS:g} mm/s)",
         "prediction_model": "constant velocity; circle moved to predicted position and "
@@ -1266,7 +1348,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Event policy: also reroute every N cycles while blocked (default: never)",
     )
     parser.add_argument(
-        "--clearance-mm", type=float, default=0.0, help="Extra planning clearance (default 0)"
+        "--clearance-mm",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Planning clearance(s) in mm; each value is a separate arm "
+        "(default: config/planner_variables.yaml)",
     )
     parser.add_argument(
         "--predict-ms",
@@ -1392,7 +1479,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             replan_policy=policies[0],
             control_period_s=1.0 / args.control_hz,
             periodic_reroute_frames=args.periodic_frames,
-            planning_clearance_mm=args.clearance_mm,
+            planning_clearance_mm=None if args.clearance_mm is None else args.clearance_mm[0],
         )
         output_folder = args.output_dir or _default_output_folder()
         if output_folder.exists() and any(output_folder.iterdir()):
@@ -1408,7 +1495,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         periods = args.replan_ms or [1000.0 / args.control_hz]
         total = (
             len(scenarios) * len(planners) * len(policies)
-            * len(args.predict_ms) * len(periods) * args.trials
+            * len(args.predict_ms) * len(periods) * len(args.clearance_mm or [1]) * args.trials
         )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
@@ -1430,6 +1517,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             progress=True,
             predictions_ms=args.predict_ms,
             replan_periods_ms=args.replan_ms,
+            clearances_mm=args.clearance_mm,
         )
         write_results(
             results,
