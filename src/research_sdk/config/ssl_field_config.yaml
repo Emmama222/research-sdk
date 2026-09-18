@@ -4,7 +4,7 @@ team_is_positive: true
 field_length_mm: 9000
 field_width_mm: 6000
 defence_x_mm: 1000
-defence_y_mm: 1000
+defence_y_mm: 2000
 goal_width_mm: 1000
 goal_depth_mm: 180
 
