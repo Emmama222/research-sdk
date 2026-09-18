@@ -351,11 +351,13 @@ class VisibilityGraphPlanner:
         *,
         use_reroute_gate: bool = True,
         periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
+        check_full_route: bool = False,
         **plan_kwargs,
     ) -> None:
         self._plan_kwargs = plan_kwargs
         self.use_reroute_gate = use_reroute_gate
         self.periodic_reroute_frames = periodic_reroute_frames
+        self.check_full_route = check_full_route
         self._state_by_robot: dict[RobotKey, RouteState] = {}
         self._last_output_by_robot: dict[RobotKey, PlannerOutput] = {}
 
@@ -386,6 +388,7 @@ class VisibilityGraphPlanner:
             ignore_robots={robot_key},
             clearance_mm=planner_input.clearance_mm,
             periodic_reroute_frames=self.periodic_reroute_frames,
+            check_full_route=self.check_full_route,
         )
         if decision.is_path_free:
             commit_reroute(state, (), target_pose)

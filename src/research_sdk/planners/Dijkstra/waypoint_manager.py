@@ -105,6 +105,7 @@ class VoronoiWaypointManager:
         boundary_inset_mm: float = VORONOI_BOUNDARY_INSET_MM,
         use_reroute_gate: bool = True,
         periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
+        check_full_route: bool = False,
     ) -> None:
         self.horizon_ms = horizon_ms
         self.density_percent = density_percent
@@ -117,6 +118,7 @@ class VoronoiWaypointManager:
         # of always rerouting whenever the direct line isn't clear.
         self.use_reroute_gate = use_reroute_gate
         self.periodic_reroute_frames = periodic_reroute_frames
+        self.check_full_route = check_full_route
         self._state_by_robot: dict[RobotKey, RouteState] = {}
 
     def reset(self, robot_id: int | None = None, is_yellow: bool | None = None) -> None:
@@ -182,6 +184,7 @@ class VoronoiWaypointManager:
                 horizon_ms=self.horizon_ms,
                 target_deadzone_mm=planner_input.reroute_target_deadzone_mm,
                 periodic_reroute_frames=self.periodic_reroute_frames,
+                check_full_route=self.check_full_route,
             )
             is_path_free = decision.is_path_free
             need_reroute = decision.need_reroute

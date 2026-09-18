@@ -118,3 +118,49 @@ results = run_experiments(
 )
 write_results(results, 'results/headless_example', config=config)
 ~~~
+
+## Replanning experiments
+
+| Option | Meaning |
+|---|---|
+| `--policy once cycle event` (or `all`) | Plan once; rebuild every replan period; or check every period and rebuild only when the reroute trigger fires |
+| `--replan-ms 20 50 100 200` | Replanning period(s). Each value is a separate arm |
+| `--predict-ms 0 50 100` | Obstacle motion-prediction horizon(s), same model as the UI's *Predict motion*. Each value is a separate arm |
+| `--clearance-mm` | Extra planning clearance |
+| `--random N` | N seeded random scenarios (`--robots`, `--obstacles`, `--moving-fraction`, `--obstacle-speed`) |
+| `--patrol-fraction F`, `--patrol-points K` | Share of moving obstacles that patrol K random waypoints instead of drifting |
+| `--perturb N` | N jittered copies of each saved scenario (`--jitter-mm`) |
+| `--workers N` | Parallel processes (0 = all CPUs). Use 1 for timing numbers |
+
+Obstacle motion is a pure function of time, so every planner and policy sees the identical moving world.
+
+- **Patrol obstacles** move back and forth along *spawn → waypoint 1 → … → waypoint n* at `patrol_speed_mmps` (default 800 mm/s). The UI runtime uses the same route.
+- **Drifting obstacles** move at constant velocity and bounce off the field walls.
+
+Example (6 planned robots against 6 patrolling obstacles):
+
+~~~shell
+research-sdk-headless --random 200 --robots 6 --obstacles 6 --moving-fraction 1 \
+  --patrol-fraction 1 --planner all --policy all --predict-ms 0 100 --replan-ms 20 100
+python scripts/analyse_sweep.py results/<folder>      # heatmaps + best settings
+python scripts/analyse_matrix.py results/<folder>     # per-arm tables and paired tests
+~~~
+
+### Additional metrics (runs.csv)
+
+| Column | Meaning |
+|---|---|
+| `replan_count`, `replan_failures` | Route rebuilds after t = 0, and rebuild attempts that returned nothing |
+| `rebuild_calls` / `check_calls` | Planner calls that produced a route vs. calls that only confirmed the current one |
+| `planning_time_ms_rebuild` / `planning_time_ms_check` | Time spent in each kind of call (policy-check cost vs. actual planning cost) |
+| `replans_active_blocked`, `replans_route_finished`, `replans_other`, `replans_scheduled` | Why each rebuild happened, judged from the executor side. *Scheduled* means the every-cycle policy |
+| `direct_path_switches` | Times a robot dropped its route because the straight line became clear |
+| `path_shift_mm_mean` / `_max` | Route churn: mean distance of a rebuilt route's first 1.5 m from the route it replaced |
+| `heading_change_rad_per_m`, `sharp_turns` | Smoothness of the executed motion (total turning per metre; turns over 90°) |
+| `minimum_robot_clearance_mm`, `minimum_obstacle_clearance_mm` | Closest approach to another robot and to an obstacle. Negative means overlap |
+| `contact_time_ms` | Simulated time spent in any contact |
+| `prediction_horizon_ms`, `replan_period_ms` | The settings for the run |
+
+`summary.csv` also reports `collision_probability` (share of runs with at least one contact) with a 95% Wilson interval. It also reports `rebuild_share_of_planning_time` and the mean cost of a check call and of a rebuild call.
+
+The kinematic backend has no tracking-error metric. Robots follow their waypoint polyline exactly, apart from the waypoint-switch tolerance, so tracking error is only meaningful with the grSim backend.

@@ -173,7 +173,11 @@ def heatmaps(table: pd.DataFrame, policy: str, path: Path) -> None:
             axes[0, col].set_ylabel("Prediction horizon (ms)", fontsize=8, color=INK_2)
             axes[1, col].set_ylabel("Prediction horizon (ms)", fontsize=8, color=INK_2)
     fig.colorbar(im1, ax=axes[0, :], shrink=0.85, label="Collision-free runs (%)")
-    fig.colorbar(im2, ax=axes[1, :], shrink=0.85, label="Planning time per run (ms, median)")
+    bar = fig.colorbar(im2, ax=axes[1, :], shrink=0.85, label="Planning time per run (ms, median)")
+    ticks = [t for t in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000)
+             if time_norm.vmin <= t <= time_norm.vmax]
+    bar.set_ticks(ticks, labels=[f"{t:g}" for t in ticks])
+    bar.minorticks_off()
     fig.suptitle(POLICY_TITLE.get(policy, policy), fontsize=9, color=INK_2, x=0.02, ha="left")
     for suffix in (".pdf", ".png"):
         fig.savefig(path.with_suffix(suffix), dpi=200)

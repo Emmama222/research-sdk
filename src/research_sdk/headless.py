@@ -15,6 +15,8 @@ Replanning policies (``SimulationConfig.replan_policy``):
   the shared reroute gate (``planners/reroute.py``) reports an event: direct
   line blocked *and* the target moved, the route finished, or the active
   segment became blocked.
+* ``event_route`` -- as ``event``, but a blocked segment anywhere on the
+  remaining route also counts as an event.
 
 In ``cycle`` and ``event`` modes the scene given to the planner is rebuilt
 every control cycle from the robots' current positions and velocities and the
@@ -32,7 +34,7 @@ from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from itertools import pairwise
-from math import hypot, isfinite
+from math import atan2, hypot, isfinite, pi, sqrt
 from pathlib import Path
 from statistics import fmean, median
 from time import perf_counter
@@ -53,12 +55,13 @@ from research_sdk.ui.scenarios import (
     ScenarioObstacle,
     ScenarioRobot,
 )
+from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.scene import FieldDimensions, PlanningObstacle, PlanningScene
 
 Point = tuple[float, float]
 RobotKey = tuple[bool, int]
 PLANNER_NAMES = ("voronoi", "prm", "visibility")
-REPLAN_POLICIES = ("once", "cycle", "event")
+REPLAN_POLICIES = ("once", "cycle", "event", "event_route")
 NEAR_MISS_MM = 50.0
 
 
@@ -150,6 +153,28 @@ class HeadlessRunResult:
     planning_time_ms_p95_call: float = 0.0
     straight_line_mm: float = 0.0
     replan_period_ms: float = 0.0
+    # Where planning time went: calls that rebuilt a route vs cheap checks.
+    rebuild_calls: int = 0
+    check_calls: int = 0
+    planning_time_ms_rebuild: float = 0.0
+    planning_time_ms_check: float = 0.0
+    # Why routes were rebuilt (executor-side classification, see _replan_reason).
+    replans_active_blocked: int = 0
+    replans_route_finished: int = 0
+    replans_route_blocked: int = 0
+    replans_scheduled: int = 0
+    replans_other: int = 0
+    direct_path_switches: int = 0
+    # How much each rebuild moved the route (mean distance of the new route's
+    # first 1.5 m from the old remaining route).
+    path_shift_mm_mean: float = 0.0
+    path_shift_mm_max: float = 0.0
+    # Executed-motion quality.
+    heading_change_rad_per_m: float = 0.0
+    sharp_turns: int = 0
+    minimum_robot_clearance_mm: float | None = None
+    minimum_obstacle_clearance_mm: float | None = None
+    contact_time_ms: float = 0.0
 
     def to_record(self) -> dict[str, str | bool | int | float | None]:
         return asdict(self)
@@ -166,6 +191,9 @@ class _RobotState:
     velocity_mmps: Point = (0.0, 0.0)
     reached_since_call: int = 0
     initial_path: tuple[Point, ...] = ()
+    last_heading: float | None = None
+    heading_change_rad: float = 0.0
+    sharp_turns: int = 0
 
     @property
     def key(self) -> RobotKey:
@@ -191,6 +219,7 @@ def _new_planner(
     gate = {
         "use_reroute_gate": policy != "cycle",
         "periodic_reroute_frames": periodic_reroute_frames,
+        "check_full_route": policy == "event_route",
     }
     if name == "voronoi":
         return PlannerAPI(**gate)
@@ -326,11 +355,20 @@ def _plan_call(
     simulation_s: float,
     config: SimulationConfig,
     first: bool,
+    record: dict | None = None,
 ) -> tuple[float, int, int]:
-    """Consult the planner once; return (elapsed ms, replanned, failed)."""
+    """Consult the planner once; return (elapsed ms, replanned, failed).
+
+    ``record`` (optional) receives ``kind`` (initial / rebuild / switch_direct /
+    check / failed), the ``reason`` a rebuild would be attributed to, and the
+    rebuild's ``shift_mm``.
+    """
     robot = state.robot
     assert robot.target_mm is not None
     target = (float(robot.target_mm[0]), float(robot.target_mm[1]))
+    record = {} if record is None else record
+    old_route = (state.position, *state.path[state.waypoint_index :])
+    record["reason"] = "initial" if first else _replan_reason(state, scene, config)
     if config.replan_policy == "cycle" and not first:
         # Per-tick baseline: discard cached routes so every call is a rebuild.
         planner.reset(robot_id=robot.robot_id, is_yellow=robot.is_yellow)
@@ -373,19 +411,24 @@ def _plan_call(
         state.failed = not success
         state.initial_path = state.path
         state.waypoint_index = 1
+        record["kind"] = "initial" if success else "failed"
         return elapsed_ms, 0, 0
 
+    record["kind"] = "check"
     if output is None:
+        record["kind"] = "failed"
         return elapsed_ms, 0, 1
     if output.is_path_free:
         if state.path[state.waypoint_index :] != (target,):
             state.path = _dedupe_path((state.position, target))
             state.waypoint_index = 1
+            record["kind"] = "switch_direct"
         return elapsed_ms, 0, 0
     if not output.did_reroute:
         return elapsed_ms, 0, 0
     if not waypoints:
         # Rebuild attempted but produced nothing: keep executing the old route.
+        record["kind"] = "failed"
         return elapsed_ms, 0, 1
     new_path = _dedupe_path((state.position, *waypoints, target))
     if len(new_path) <= 2:
@@ -394,10 +437,65 @@ def _plan_call(
         if state.path[state.waypoint_index :] != (target,):
             state.path = new_path
             state.waypoint_index = 1
+            record["kind"] = "switch_direct"
         return elapsed_ms, 0, 0
     state.path = new_path
     state.waypoint_index = 1
+    record["kind"] = "rebuild"
+    record["shift_mm"] = _route_shift(old_route, new_path)
     return elapsed_ms, 1, 0
+
+
+def _replan_reason(state: _RobotState, scene: PlanningScene, config: SimulationConfig) -> str:
+    """Attribute a potential rebuild to the executor-visible event that explains it.
+
+    ``scheduled`` for the every-cycle policy; otherwise ``active_blocked`` when
+    the segment to the next waypoint is no longer clear, ``route_finished``
+    when no waypoints remain, and ``other`` (e.g. a periodic safety reroute).
+    """
+    if config.replan_policy == "cycle":
+        return "scheduled"
+    if state.waypoint_index >= len(state.path):
+        return "route_finished"
+    free = scene.is_path_free(
+        state.position,
+        state.path[state.waypoint_index],
+        ignore_robots={state.key},
+        clearance=config.planning_clearance_mm,
+    )
+    if not free:
+        return "active_blocked"
+    route = (*state.path[state.waypoint_index :],)
+    for first, second in pairwise(route):
+        if not scene.is_path_free(
+            first, second, ignore_robots={state.key}, clearance=config.planning_clearance_mm
+        ):
+            return "route_blocked"
+    return "other"
+
+
+def _route_shift(old_route: Sequence[Point], new_route: Sequence[Point], ahead_mm: float = 1500.0,
+                 step_mm: float = 100.0) -> float:
+    """Mean distance of the new route's first ``ahead_mm`` from the old route."""
+    old_segments = list(pairwise(old_route)) or [(old_route[0], old_route[0])]
+    samples: list[Point] = []
+    travelled = 0.0
+    for start, end in pairwise(new_route):
+        length = _distance(start, end)
+        offset = 0.0
+        while offset <= length and travelled + offset <= ahead_mm:
+            ratio = 0.0 if length <= 0 else offset / length
+            samples.append((start[0] + (end[0] - start[0]) * ratio,
+                            start[1] + (end[1] - start[1]) * ratio))
+            offset += step_mm
+        travelled += length
+        if travelled > ahead_mm:
+            break
+    if not samples:
+        return 0.0
+    return fmean(
+        min(distance_2_segment(point, a, b) for a, b in old_segments) for point in samples
+    )
 
 
 def _plan_robot(
@@ -527,6 +625,7 @@ def _collisions(
     obstacles: Sequence[ScenarioObstacle],
     simulation_s: float,
     contact_tolerance_mm: float = 0.0,
+    split: dict | None = None,
 ) -> tuple[set[tuple[RobotKey, RobotKey]], set[tuple[RobotKey, RobotKey]], float | None]:
     robot_pairs: set[tuple[RobotKey, RobotKey]] = set()
     obstacle_pairs: set[tuple[RobotKey, RobotKey]] = set()
@@ -551,6 +650,12 @@ def _collisions(
             if clearance <= contact_tolerance_mm:
                 obstacle_pairs.add((state.key, obstacle_key))
 
+    if split is not None:
+        robot_count = len(states) * (len(states) - 1) // 2
+        for name, values in (("robot", clearances[:robot_count]), ("obstacle", clearances[robot_count:])):
+            if values:
+                current = split.get(name)
+                split[name] = min(values) if current is None else min(current, min(values))
     return robot_pairs, obstacle_pairs, min(clearances) if clearances else None
 
 
@@ -583,6 +688,15 @@ def simulate(
     initial_durations_ms: list[float] = []
     replan_count = 0
     replan_failures = 0
+    rebuild_ms: list[float] = []
+    check_ms: list[float] = []
+    reasons = {
+        "active_blocked": 0, "route_blocked": 0, "route_finished": 0, "scheduled": 0, "other": 0
+    }
+    direct_switches = 0
+    shifts: list[float] = []
+    split_clearance: dict = {}
+    contact_time_s = 0.0
     active_robot_collisions: set[tuple[RobotKey, RobotKey]] = set()
     active_obstacle_collisions: set[tuple[RobotKey, RobotKey]] = set()
     robot_collision_episodes = 0
@@ -611,10 +725,21 @@ def simulate(
                     simulation_s,
                     config.prediction_horizon_ms,
                 )
+                record: dict = {}
                 elapsed_ms, replanned, failed = _plan_call(
-                    planner, state, scene, simulation_s, config, first_cycle
+                    planner, state, scene, simulation_s, config, first_cycle, record
                 )
                 call_durations_ms.append(elapsed_ms)
+                kind = record.get("kind")
+                if kind in ("initial", "rebuild"):
+                    rebuild_ms.append(elapsed_ms)
+                else:
+                    check_ms.append(elapsed_ms)
+                if kind == "rebuild":
+                    reasons[record["reason"]] = reasons.get(record["reason"], 0) + 1
+                    shifts.append(record.get("shift_mm", 0.0))
+                elif kind == "switch_direct":
+                    direct_switches += 1
                 if first_cycle:
                     initial_durations_ms.append(elapsed_ms)
                 replan_count += replanned
@@ -624,7 +749,9 @@ def simulate(
                 next_control_s += config.control_period_s
 
         all_paths_done = all(_advance_waypoint(state, config) for state in states)
-        current_robot, current_obstacle, clearance = _collisions(states, obstacles, simulation_s)
+        current_robot, current_obstacle, clearance = _collisions(
+            states, obstacles, simulation_s, split=split_clearance
+        )
         robot_collision_episodes += len(current_robot - active_robot_collisions)
         obstacle_collision_episodes += len(current_obstacle - active_obstacle_collisions)
         active_robot_collisions = current_robot
@@ -641,9 +768,20 @@ def simulate(
             gap = next_control_s - simulation_s
             if gap > 1e-9:
                 step_s = min(step_s, gap)
+        if current_robot or current_obstacle:
+            contact_time_s += step_s
         next_positions = [_next_position(state, step_s, config) for state in states]
         for state, position in zip(states, next_positions):
-            state.travelled_mm += _distance(state.position, position)
+            moved = _distance(state.position, position)
+            if moved > 1e-6:
+                heading = atan2(position[1] - state.position[1], position[0] - state.position[0])
+                if state.last_heading is not None:
+                    turn = abs((heading - state.last_heading + pi) % (2 * pi) - pi)
+                    state.heading_change_rad += turn
+                    if turn > pi / 2:
+                        state.sharp_turns += 1
+                state.last_heading = heading
+            state.travelled_mm += moved
             state.velocity_mmps = (
                 (position[0] - state.position[0]) / step_s,
                 (position[1] - state.position[1]) / step_s,
@@ -711,6 +849,26 @@ def simulate(
         planning_time_ms_p95_call=_percentile(call_durations_ms, 0.95)
         if call_durations_ms
         else 0.0,
+        rebuild_calls=len(rebuild_ms),
+        check_calls=len(check_ms),
+        planning_time_ms_rebuild=sum(rebuild_ms),
+        planning_time_ms_check=sum(check_ms),
+        replans_active_blocked=reasons["active_blocked"],
+        replans_route_finished=reasons["route_finished"],
+        replans_route_blocked=reasons["route_blocked"],
+        replans_scheduled=reasons["scheduled"],
+        replans_other=reasons["other"],
+        direct_path_switches=direct_switches,
+        path_shift_mm_mean=fmean(shifts) if shifts else 0.0,
+        path_shift_mm_max=max(shifts, default=0.0),
+        heading_change_rad_per_m=(
+            sum(state.heading_change_rad for state in states)
+            / max(sum(state.travelled_mm for state in states) / 1000.0, 1e-9)
+        ),
+        sharp_turns=sum(state.sharp_turns for state in states),
+        minimum_robot_clearance_mm=split_clearance.get("robot"),
+        minimum_obstacle_clearance_mm=split_clearance.get("obstacle"),
+        contact_time_ms=contact_time_s * 1000.0,
         straight_line_mm=sum(
             _distance(state.robot.start_mm, state.robot.target_mm)
             for state in states
@@ -861,6 +1019,16 @@ def _policy_label(result: HeadlessRunResult) -> str:
     return result.replan_policy
 
 
+def _wilson(successes: int, n: int, z: float = 1.96) -> str:
+    """95% Wilson score interval for a proportion, formatted 'low-high'."""
+    if n == 0:
+        return ""
+    p = successes / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return f"{max(0.0, centre - half):.3f}-{min(1.0, centre + half):.3f}"
+
+
 def summarize_results(
     results: Sequence[HeadlessRunResult],
 ) -> list[dict[str, str | bool | int | float | None]]:
@@ -927,6 +1095,30 @@ def summarize_results(
                     run.planning_time_ms_total / max(run.simulated_duration_ms / 1000.0, 1e-9)
                     for run in runs
                 ),
+                "collision_probability": 1.0 - sum(run.collision_episodes == 0 for run in runs) / len(runs),
+                "collision_probability_ci95": _wilson(
+                    sum(run.collision_episodes > 0 for run in runs), len(runs)
+                ),
+                "contact_time_ms_mean": fmean(run.contact_time_ms for run in runs),
+                "rebuild_share_of_planning_time": (
+                    sum(run.planning_time_ms_rebuild for run in runs)
+                    / max(sum(run.planning_time_ms_total for run in runs), 1e-9)
+                ),
+                "check_call_ms_mean": (
+                    sum(run.planning_time_ms_check for run in runs)
+                    / max(sum(run.check_calls for run in runs), 1)
+                ),
+                "rebuild_call_ms_mean": (
+                    sum(run.planning_time_ms_rebuild for run in runs)
+                    / max(sum(run.rebuild_calls for run in runs), 1)
+                ),
+                "replans_active_blocked_mean": fmean(run.replans_active_blocked for run in runs),
+                "replans_route_finished_mean": fmean(run.replans_route_finished for run in runs),
+                "replans_route_blocked_mean": fmean(run.replans_route_blocked for run in runs),
+                "direct_path_switches_mean": fmean(run.direct_path_switches for run in runs),
+                "path_shift_mm_mean": fmean(run.path_shift_mm_mean for run in runs),
+                "heading_change_rad_per_m_mean": fmean(run.heading_change_rad_per_m for run in runs),
+                "sharp_turns_mean": fmean(run.sharp_turns for run in runs),
                 "path_efficiency_mean": fmean(
                     run.straight_line_mm / run.travelled_distance_mm
                     for run in runs

@@ -144,8 +144,8 @@ def test_cli_random_matrix_writes_scenarios_and_manifest(tmp_path) -> None:
     )
     assert exit_code == 0
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["run_count"] == 2 * 2 * 3
-    assert manifest["replan_policies"] == ["cycle", "event", "once"]
+    assert manifest["run_count"] == 2 * 2 * 4
+    assert manifest["replan_policies"] == ["cycle", "event", "event_route", "once"]
     assert manifest["scenario_sets"] == ["random"]
     assert len(list((output / "scenarios").glob("*.json"))) == 2
 
@@ -273,3 +273,88 @@ def test_replan_period_and_prediction_are_sweep_axes() -> None:
 def test_invalid_replan_period_is_rejected() -> None:
     with pytest.raises(ValueError, match="replan periods"):
         run_experiments([_crossing_scenario()], ["prm"], replan_periods_ms=[0.0])
+
+
+def test_planning_time_is_split_into_rebuilds_and_checks() -> None:
+    event = simulate(_crossing_scenario(), "voronoi", config=_config("event"))
+    assert event.rebuild_calls == event.robot_count + event.replan_count
+    assert event.check_calls == event.planner_calls - event.rebuild_calls
+    assert event.planning_time_ms_rebuild + event.planning_time_ms_check == pytest.approx(
+        event.planning_time_ms_total
+    )
+    reasons = (
+        event.replans_active_blocked + event.replans_route_finished
+        + event.replans_route_blocked + event.replans_other + event.replans_scheduled
+    )
+    assert reasons == event.replan_count
+    assert event.replans_scheduled == 0
+
+    cycle = simulate(_crossing_scenario(), "prm", config=_config("cycle"))
+    assert cycle.replans_scheduled == cycle.replan_count
+
+
+def test_motion_quality_and_split_clearance_metrics() -> None:
+    straight = simulate(
+        Scenario("straight", robots=[ScenarioRobot(0, True, (-1000.0, 0.0), (1000.0, 0.0))]),
+        "visibility",
+        config=_config("once"),
+    )
+    assert straight.heading_change_rad_per_m == pytest.approx(0.0, abs=1e-9)
+    assert straight.sharp_turns == 0
+    assert straight.minimum_robot_clearance_mm is None
+    assert straight.minimum_obstacle_clearance_mm is None
+    assert straight.contact_time_ms == 0.0
+
+    once = simulate(_crossing_scenario(), "voronoi", config=_config("once"))
+    assert once.minimum_robot_clearance_mm < 0  # the two robots collide head-on
+    assert once.contact_time_ms > 0
+    assert once.minimum_obstacle_clearance_mm is None
+
+
+def test_route_shift_measures_how_far_a_rebuild_moved_the_route() -> None:
+    from research_sdk.headless import _route_shift
+
+    old = ((0.0, 0.0), (2000.0, 0.0))
+    assert _route_shift(old, old) == pytest.approx(0.0)
+    assert _route_shift(old, ((0.0, 100.0), (2000.0, 100.0))) == pytest.approx(100.0)
+
+
+def test_summary_reports_collision_probability_with_confidence_interval() -> None:
+    results = run_experiments(
+        [_crossing_scenario()], ["voronoi"], policies=["once", "event"],
+        config=SimulationConfig(max_simulation_s=20.0),
+    )
+    rows = {row["replan_policy"]: row for row in summarize_results(results)}
+    assert rows["once"]["collision_probability"] == 1.0
+    low, high = map(float, rows["once"]["collision_probability_ci95"].split("-"))
+    assert 0.0 < low < 1.0 == high
+    assert rows["event"]["collision_probability"] == 0.0
+
+
+def test_full_route_check_triggers_on_a_blocked_later_segment() -> None:
+    from research_sdk.planners.reroute import RouteState, evaluate_route
+    from research_sdk.world.scene import PlanningObstacle, PlanningScene
+
+    # Route: (0,0) -> (1000,0) -> (1000,1000) -> target (2000,1000). The only
+    # obstacle sits on the second segment (and on the direct line), not on the
+    # active segment to the first waypoint.
+    state = RouteState(
+        last_target_pose=(2000.0, 1000.0, 0.0),
+        waypoints=((1000.0, 0.0, 0.0), (1000.0, 1000.0, 0.0)),
+    )
+    scene = PlanningScene(0.0, (PlanningObstacle(4, True, (1000.0, 500.0), 90.0),))
+    start, target = (0.0, 0.0), (2000.0, 1000.0)
+    assert not scene.is_path_free(start, target)
+    active_only = evaluate_route(scene, start, target, state, periodic_reroute_frames=None)
+    full = evaluate_route(
+        scene, start, target, state, periodic_reroute_frames=None, check_full_route=True
+    )
+    assert not active_only.need_reroute
+    assert full.need_reroute
+
+
+@pytest.mark.parametrize("planner_name", PLANNER_NAMES)
+def test_event_route_policy_runs_for_every_planner(planner_name: str) -> None:
+    result = simulate(_crossing_scenario(), planner_name, config=_config("event_route"))
+    assert result.completed
+    assert result.replan_policy == "event_route"
