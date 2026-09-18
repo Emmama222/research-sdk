@@ -1,0 +1,183 @@
+{
+  "name": "22.11.24.08.2026~p019",
+  "robots": [
+    {
+      "robot_id": 1,
+      "is_yellow": true,
+      "start_mm": [
+        -469.0,
+        737.3
+      ],
+      "target_mm": [
+        1499.2,
+        1638.6
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 5,
+      "is_yellow": false,
+      "start_mm": [
+        1017.0,
+        829.0
+      ],
+      "target_mm": [
+        109.3,
+        1857.6
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 1,
+      "is_yellow": false,
+      "start_mm": [
+        -365.5,
+        -26.9
+      ],
+      "target_mm": [
+        3525.2,
+        53.2
+      ],
+      "orientation_rad": 0.0
+    }
+  ],
+  "obstacles": [
+    {
+      "obstacle_id": 0,
+      "is_yellow": true,
+      "position_mm": [
+        1608.4,
+        1755.9
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 2,
+      "is_yellow": true,
+      "position_mm": [
+        577.8,
+        -355.3
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 3,
+      "is_yellow": true,
+      "position_mm": [
+        1464.1,
+        677.8
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 5,
+      "is_yellow": true,
+      "position_mm": [
+        3697.9,
+        1121.5
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 0,
+      "is_yellow": false,
+      "position_mm": [
+        747.2,
+        1342.4
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 2,
+      "is_yellow": false,
+      "position_mm": [
+        542.7,
+        1267.6
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 3,
+      "is_yellow": false,
+      "position_mm": [
+        -782.0,
+        1134.4
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 4,
+      "is_yellow": false,
+      "position_mm": [
+        207.2,
+        1097.5
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    },
+    {
+      "obstacle_id": 4,
+      "is_yellow": true,
+      "position_mm": [
+        -101.0,
+        96.4
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": []
+    }
+  ],
+  "ball": {
+    "position_mm": [
+      4333.6567,
+      1339.9404
+    ],
+    "velocity_mmps": [
+      0.0,
+      0.0
+    ]
+  },
+  "schema_version": 3
+}

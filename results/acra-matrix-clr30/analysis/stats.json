@@ -1,0 +1,432 @@
+{
+  "excluded_initial_plan_failures": [
+    [
+      "22.11.24.08.2026~p002",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p002",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "visibility"
+    ],
+    [
+      "crowded~p001",
+      "prm"
+    ],
+    [
+      "crowded~p001",
+      "visibility"
+    ],
+    [
+      "crowded~p003",
+      "prm"
+    ],
+    [
+      "crowded~p003",
+      "visibility"
+    ],
+    [
+      "crowded~p005",
+      "prm"
+    ],
+    [
+      "crowded~p005",
+      "visibility"
+    ],
+    [
+      "crowded~p007",
+      "prm"
+    ],
+    [
+      "crowded~p007",
+      "visibility"
+    ],
+    [
+      "crowded~p008",
+      "prm"
+    ],
+    [
+      "crowded~p008",
+      "visibility"
+    ],
+    [
+      "crowded~p011",
+      "prm"
+    ],
+    [
+      "crowded~p011",
+      "visibility"
+    ],
+    [
+      "crowded~p012",
+      "prm"
+    ],
+    [
+      "crowded~p012",
+      "visibility"
+    ],
+    [
+      "crowded~p014",
+      "prm"
+    ],
+    [
+      "crowded~p014",
+      "visibility"
+    ],
+    [
+      "crowded~p017",
+      "prm"
+    ],
+    [
+      "crowded~p017",
+      "visibility"
+    ],
+    [
+      "crowded~p019",
+      "prm"
+    ],
+    [
+      "crowded~p019",
+      "visibility"
+    ],
+    [
+      "random-s0-0004",
+      "voronoi"
+    ],
+    [
+      "random-s0-0005",
+      "voronoi"
+    ],
+    [
+      "random-s0-0021",
+      "prm"
+    ],
+    [
+      "random-s0-0021",
+      "visibility"
+    ],
+    [
+      "random-s0-0029",
+      "voronoi"
+    ],
+    [
+      "random-s0-0032",
+      "voronoi"
+    ],
+    [
+      "random-s0-0041",
+      "voronoi"
+    ],
+    [
+      "random-s0-0043",
+      "voronoi"
+    ],
+    [
+      "random-s0-0047",
+      "voronoi"
+    ],
+    [
+      "random-s0-0048",
+      "voronoi"
+    ],
+    [
+      "random-s0-0066",
+      "voronoi"
+    ],
+    [
+      "random-s0-0069",
+      "voronoi"
+    ],
+    [
+      "random-s0-0070",
+      "voronoi"
+    ],
+    [
+      "random-s0-0077",
+      "voronoi"
+    ],
+    [
+      "random-s0-0081",
+      "voronoi"
+    ],
+    [
+      "random-s0-0083",
+      "prm"
+    ],
+    [
+      "random-s0-0083",
+      "visibility"
+    ],
+    [
+      "random-s0-0085",
+      "voronoi"
+    ],
+    [
+      "random-s0-0090",
+      "voronoi"
+    ],
+    [
+      "random-s0-0091",
+      "voronoi"
+    ],
+    [
+      "random-s0-0098",
+      "voronoi"
+    ],
+    [
+      "random-s0-0108",
+      "voronoi"
+    ],
+    [
+      "random-s0-0113",
+      "voronoi"
+    ],
+    [
+      "random-s0-0117",
+      "voronoi"
+    ],
+    [
+      "random-s0-0119",
+      "voronoi"
+    ],
+    [
+      "random-s0-0124",
+      "voronoi"
+    ],
+    [
+      "random-s0-0131",
+      "voronoi"
+    ],
+    [
+      "random-s0-0153",
+      "voronoi"
+    ],
+    [
+      "random-s0-0154",
+      "prm"
+    ],
+    [
+      "random-s0-0154",
+      "visibility"
+    ],
+    [
+      "random-s0-0156",
+      "voronoi"
+    ],
+    [
+      "random-s0-0157",
+      "voronoi"
+    ],
+    [
+      "random-s0-0163",
+      "voronoi"
+    ],
+    [
+      "random-s0-0165",
+      "voronoi"
+    ],
+    [
+      "random-s0-0167",
+      "voronoi"
+    ],
+    [
+      "random-s0-0173",
+      "prm"
+    ],
+    [
+      "random-s0-0173",
+      "visibility"
+    ],
+    [
+      "random-s0-0179",
+      "voronoi"
+    ],
+    [
+      "random-s0-0188",
+      "voronoi"
+    ],
+    [
+      "random-s0-0193",
+      "prm"
+    ],
+    [
+      "random-s0-0193",
+      "visibility"
+    ],
+    [
+      "random-s0-0194",
+      "voronoi"
+    ]
+  ],
+  "random": {
+    "voronoi": {
+      "n_scenarios": 168,
+      "planning_time_cycle_over_event_median_ratio": 4.700206330802525,
+      "planning_time_cycle_over_event_iqr": [
+        2.0689395455008164,
+        7.868358027541085
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 2.3603405401972303e-27,
+      "replans_event_mean": 1.8571428571428572,
+      "replans_cycle_mean": 39.86309523809524,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 42,
+        "once_only_safe": 6,
+        "mcnemar_exact_p": 1.0087482138487759e-07
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 6,
+        "cycle_only_safe": 10,
+        "mcnemar_exact_p": 0.454498291015625
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 9.785650957556046e-07,
+      "time_to_goal_pairs": 168
+    },
+    "prm": {
+      "n_scenarios": 195,
+      "planning_time_cycle_over_event_median_ratio": 8.466867412588671,
+      "planning_time_cycle_over_event_iqr": [
+        6.604407115369417,
+        13.30238250806701
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 9.482403857733062e-34,
+      "replans_event_mean": 1.7692307692307692,
+      "replans_cycle_mean": 36.92307692307692,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 60,
+        "once_only_safe": 0,
+        "mcnemar_exact_p": 1.734723475976807e-18
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 2,
+        "cycle_only_safe": 4,
+        "mcnemar_exact_p": 0.6875
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 9.551194126473703e-11,
+      "time_to_goal_pairs": 195
+    },
+    "visibility": {
+      "n_scenarios": 195,
+      "planning_time_cycle_over_event_median_ratio": 5.431116285267718,
+      "planning_time_cycle_over_event_iqr": [
+        3.259290894556518,
+        14.107881696956035
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 9.482403857733062e-34,
+      "replans_event_mean": 7.697435897435898,
+      "replans_cycle_mean": 63.43589743589744,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 30,
+        "once_only_safe": 5,
+        "mcnemar_exact_p": 2.2361520677804947e-05
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 4,
+        "cycle_only_safe": 6,
+        "mcnemar_exact_p": 0.75390625
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 6.935471348384025e-05,
+      "time_to_goal_pairs": 195
+    }
+  },
+  "perturbed": {
+    "voronoi": {
+      "n_scenarios": 60,
+      "planning_time_cycle_over_event_median_ratio": 16.158810540674082,
+      "planning_time_cycle_over_event_iqr": [
+        10.886896336956546,
+        23.392740287409453
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 1.6295557943119345e-11,
+      "replans_event_mean": 5.216666666666667,
+      "replans_cycle_mean": 265.8333333333333,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 17,
+        "once_only_safe": 2,
+        "mcnemar_exact_p": 0.000728607177734375
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 2,
+        "cycle_only_safe": 2,
+        "mcnemar_exact_p": 1.0
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.6583333333333308,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 6.020747429056948e-08,
+      "time_to_goal_pairs": 54
+    },
+    "prm": {
+      "n_scenarios": 46,
+      "planning_time_cycle_over_event_median_ratio": 19.617330086528675,
+      "planning_time_cycle_over_event_iqr": [
+        14.041831001449054,
+        25.51188430829267
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 2.842170943040401e-14,
+      "replans_event_mean": 2.9782608695652173,
+      "replans_cycle_mean": 119.04347826086956,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 13,
+        "once_only_safe": 1,
+        "mcnemar_exact_p": 0.0018310546875
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 0,
+        "cycle_only_safe": 2,
+        "mcnemar_exact_p": 0.5
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.26666666666666605,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 4.3646597966476264e-07,
+      "time_to_goal_pairs": 46
+    },
+    "visibility": {
+      "n_scenarios": 46,
+      "planning_time_cycle_over_event_median_ratio": 5.934818954799727,
+      "planning_time_cycle_over_event_iqr": [
+        4.545654056005744,
+        7.1536261578605185
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 2.842170943040401e-14,
+      "replans_event_mean": 38.52173913043478,
+      "replans_cycle_mean": 243.41304347826087,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 4,
+        "once_only_safe": 2,
+        "mcnemar_exact_p": 0.6875
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 2,
+        "cycle_only_safe": 0,
+        "mcnemar_exact_p": 0.5
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 0.8110220751035668,
+      "time_to_goal_pairs": 46
+    }
+  }
+}

@@ -1,0 +1,778 @@
+{
+  "excluded_initial_plan_failures": [
+    [
+      "22.11.24.08.2026~p002",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p002",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "voronoi"
+    ],
+    [
+      "crowded~p001",
+      "prm"
+    ],
+    [
+      "crowded~p001",
+      "visibility"
+    ],
+    [
+      "crowded~p003",
+      "prm"
+    ],
+    [
+      "crowded~p003",
+      "visibility"
+    ],
+    [
+      "crowded~p008",
+      "prm"
+    ],
+    [
+      "crowded~p008",
+      "visibility"
+    ],
+    [
+      "crowded~p008",
+      "voronoi"
+    ],
+    [
+      "crowded~p011",
+      "prm"
+    ],
+    [
+      "crowded~p011",
+      "visibility"
+    ],
+    [
+      "crowded~p017",
+      "prm"
+    ],
+    [
+      "crowded~p017",
+      "visibility"
+    ],
+    [
+      "crowded~p017",
+      "voronoi"
+    ],
+    [
+      "random-s0-0006",
+      "prm"
+    ],
+    [
+      "random-s0-0006",
+      "visibility"
+    ],
+    [
+      "random-s0-0021",
+      "prm"
+    ],
+    [
+      "random-s0-0021",
+      "visibility"
+    ],
+    [
+      "random-s0-0083",
+      "prm"
+    ],
+    [
+      "random-s0-0083",
+      "visibility"
+    ],
+    [
+      "random-s0-0083",
+      "voronoi"
+    ],
+    [
+      "random-s0-0127",
+      "prm"
+    ],
+    [
+      "random-s0-0127",
+      "visibility"
+    ],
+    [
+      "random-s0-0152",
+      "prm"
+    ],
+    [
+      "random-s0-0152",
+      "visibility"
+    ],
+    [
+      "random-s0-0154",
+      "prm"
+    ],
+    [
+      "random-s0-0154",
+      "visibility"
+    ],
+    [
+      "random-s0-0173",
+      "prm"
+    ],
+    [
+      "random-s0-0173",
+      "visibility"
+    ],
+    [
+      "random-s0-0193",
+      "prm"
+    ],
+    [
+      "random-s0-0193",
+      "visibility"
+    ]
+  ],
+  "random": {
+    "voronoi": {
+      "n_scenarios": 199,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 4.4275700562061795,
+        "planning_time_cycle_over_event_iqr": [
+          1.8371191257940538,
+          7.272864817597332
+        ],
+        "planning_time_wilcoxon_p": 1.9438222158336645e-31,
+        "replans_event_mean": 2.4974874371859297,
+        "replans_cycle_mean": 36.64824120603015,
+        "collision_free": {
+          "event_rate": 0.8894472361809045,
+          "cycle_rate": 0.8894472361809045,
+          "only_event_safe": 8,
+          "only_cycle_safe": 8,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 0.22420435510887698,
+        "time_to_goal_wilcoxon_p": 5.088944080738528e-08,
+        "time_to_goal_pairs": 199
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.14544326920713652,
+        "planning_time_once_over_event_iqr": [
+          0.007042271283725164,
+          0.24738424335278375
+        ],
+        "planning_time_wilcoxon_p": 2.094748565718274e-34,
+        "replans_event_mean": 2.4974874371859297,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.8894472361809045,
+          "once_rate": 0.6733668341708543,
+          "only_event_safe": 48,
+          "only_once_safe": 5,
+          "mcnemar_exact_p": 7.077378683106872e-10
+        },
+        "time_to_goal_event_minus_once_s_mean": -1.5346901172529128,
+        "time_to_goal_wilcoxon_p": 1.5846870360699357e-13,
+        "time_to_goal_pairs": 199
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 0.5949084526417378,
+        "planning_time_event_over_event+pred_iqr": [
+          0.340060989800416,
+          0.8484973783581593
+        ],
+        "planning_time_wilcoxon_p": 9.464878766695184e-28,
+        "replans_event+pred_mean": 33.79899497487437,
+        "replans_event_mean": 2.4974874371859297,
+        "collision_free": {
+          "event+pred_rate": 0.9849246231155779,
+          "event_rate": 0.8894472361809045,
+          "only_event+pred_safe": 21,
+          "only_event_safe": 2,
+          "mcnemar_exact_p": 6.604194641113281e-05
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.46616415410385154,
+        "time_to_goal_wilcoxon_p": 1.2013651974186068e-14,
+        "time_to_goal_pairs": 199
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 4.686236248512226,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          2.4739937324277284,
+          7.948929532153969
+        ],
+        "planning_time_wilcoxon_p": 2.214042789325082e-33,
+        "replans_event+pred_mean": 33.79899497487437,
+        "replans_cycle+pred_mean": 96.82914572864321,
+        "collision_free": {
+          "event+pred_rate": 0.9849246231155779,
+          "cycle+pred_rate": 0.9849246231155779,
+          "only_event+pred_safe": 3,
+          "only_cycle+pred_safe": 3,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 0.1575376884422093,
+        "time_to_goal_wilcoxon_p": 1.3500016741950718e-07,
+        "time_to_goal_pairs": 199
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 1.7844607322508261,
+        "planning_time_cycle_over_event+pred_iqr": [
+          0.9055294295509098,
+          5.051334114412083
+        ],
+        "planning_time_wilcoxon_p": 2.1385627848238896e-15,
+        "replans_event+pred_mean": 33.79899497487437,
+        "replans_cycle_mean": 36.64824120603015,
+        "collision_free": {
+          "event+pred_rate": 0.9849246231155779,
+          "cycle_rate": 0.8894472361809045,
+          "only_event+pred_safe": 21,
+          "only_cycle_safe": 2,
+          "mcnemar_exact_p": 6.604194641113281e-05
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 0.6903685092127284,
+        "time_to_goal_wilcoxon_p": 1.982421952541663e-24,
+        "time_to_goal_pairs": 199
+      }
+    },
+    "prm": {
+      "n_scenarios": 192,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 8.058336384403484,
+        "planning_time_cycle_over_event_iqr": [
+          6.385414696550287,
+          13.271396716690703
+        ],
+        "planning_time_wilcoxon_p": 2.9431770883303678e-33,
+        "replans_event_mean": 1.546875,
+        "replans_cycle_mean": 32.78125,
+        "collision_free": {
+          "event_rate": 0.890625,
+          "cycle_rate": 0.8958333333333334,
+          "only_event_safe": 5,
+          "only_cycle_safe": 6,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 0.11883680555555516,
+        "time_to_goal_wilcoxon_p": 1.0021065010515025e-05,
+        "time_to_goal_pairs": 192
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.17481678729536398,
+        "planning_time_once_over_event_iqr": [
+          0.003991334892693825,
+          0.4283201305299057
+        ],
+        "planning_time_wilcoxon_p": 2.9431770883303678e-33,
+        "replans_event_mean": 1.546875,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.890625,
+          "once_rate": 0.609375,
+          "only_event_safe": 56,
+          "only_once_safe": 2,
+          "mcnemar_exact_p": 1.1879386363489175e-14
+        },
+        "time_to_goal_event_minus_once_s_mean": -0.6247048611111122,
+        "time_to_goal_wilcoxon_p": 3.381624313979488e-10,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 0.881483978623566,
+        "planning_time_event_over_event+pred_iqr": [
+          0.5593184696970661,
+          1.0704417851053605
+        ],
+        "planning_time_wilcoxon_p": 7.199416823199382e-07,
+        "replans_event+pred_mean": 2.140625,
+        "replans_event_mean": 1.546875,
+        "collision_free": {
+          "event+pred_rate": 0.8958333333333334,
+          "event_rate": 0.890625,
+          "only_event+pred_safe": 12,
+          "only_event_safe": 11,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.37526041666666554,
+        "time_to_goal_wilcoxon_p": 1.743152442137385e-11,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 7.90947976290442,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          5.3163108095782885,
+          12.482524321280152
+        ],
+        "planning_time_wilcoxon_p": 2.9431770883303678e-33,
+        "replans_event+pred_mean": 2.140625,
+        "replans_cycle+pred_mean": 40.9375,
+        "collision_free": {
+          "event+pred_rate": 0.8958333333333334,
+          "cycle+pred_rate": 0.890625,
+          "only_event+pred_safe": 3,
+          "only_cycle+pred_safe": 2,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 0.2888888888888881,
+        "time_to_goal_wilcoxon_p": 2.9159782303921406e-09,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 7.324761327283685,
+        "planning_time_cycle_over_event+pred_iqr": [
+          4.427469985610581,
+          12.091008766040389
+        ],
+        "planning_time_wilcoxon_p": 4.493065602173808e-33,
+        "replans_event+pred_mean": 2.140625,
+        "replans_cycle_mean": 32.78125,
+        "collision_free": {
+          "event+pred_rate": 0.8958333333333334,
+          "cycle_rate": 0.8958333333333334,
+          "only_event+pred_safe": 12,
+          "only_cycle_safe": 12,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 0.4940972222222207,
+        "time_to_goal_wilcoxon_p": 6.697485968782376e-16,
+        "time_to_goal_pairs": 192
+      }
+    },
+    "visibility": {
+      "n_scenarios": 192,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 4.212280502205038,
+        "planning_time_cycle_over_event_iqr": [
+          2.8926877886011897,
+          11.987014640471138
+        ],
+        "planning_time_wilcoxon_p": 2.9431770883303678e-33,
+        "replans_event_mean": 7.348958333333333,
+        "replans_cycle_mean": 53.973958333333336,
+        "collision_free": {
+          "event_rate": 0.6822916666666666,
+          "cycle_rate": 0.6979166666666666,
+          "only_event_safe": 1,
+          "only_cycle_safe": 4,
+          "mcnemar_exact_p": 0.375
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 0.061458333333333164,
+        "time_to_goal_wilcoxon_p": 0.0018580456347331241,
+        "time_to_goal_pairs": 192
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.04278191350048344,
+        "planning_time_once_over_event_iqr": [
+          0.0015365097417697226,
+          0.25838374894745597
+        ],
+        "planning_time_wilcoxon_p": 1.6368860925803693e-32,
+        "replans_event_mean": 7.348958333333333,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.6822916666666666,
+          "once_rate": 0.59375,
+          "only_event_safe": 24,
+          "only_once_safe": 7,
+          "mcnemar_exact_p": 0.003326892852783203
+        },
+        "time_to_goal_event_minus_once_s_mean": -0.08887152777778427,
+        "time_to_goal_wilcoxon_p": 0.328737472917648,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 1.0002948357918309,
+        "planning_time_event_over_event+pred_iqr": [
+          0.594710383641581,
+          1.85569850579251
+        ],
+        "planning_time_wilcoxon_p": 0.17612281650614547,
+        "replans_event+pred_mean": 5.614583333333333,
+        "replans_event_mean": 7.348958333333333,
+        "collision_free": {
+          "event+pred_rate": 0.671875,
+          "event_rate": 0.6822916666666666,
+          "only_event+pred_safe": 17,
+          "only_event_safe": 19,
+          "mcnemar_exact_p": 0.8679394004284404
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.30338541666666563,
+        "time_to_goal_wilcoxon_p": 6.772836449894046e-11,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 7.640969954743282,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          3.382599199974133,
+          14.577621468438213
+        ],
+        "planning_time_wilcoxon_p": 2.9431770883303678e-33,
+        "replans_event+pred_mean": 5.614583333333333,
+        "replans_cycle+pred_mean": 63.703125,
+        "collision_free": {
+          "event+pred_rate": 0.671875,
+          "cycle+pred_rate": 0.671875,
+          "only_event+pred_safe": 14,
+          "only_cycle+pred_safe": 14,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 0.131944444444444,
+        "time_to_goal_wilcoxon_p": 0.000619488144057004,
+        "time_to_goal_pairs": 192
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 6.858093894544881,
+        "planning_time_cycle_over_event+pred_iqr": [
+          3.08472031821102,
+          14.695027419202559
+        ],
+        "planning_time_wilcoxon_p": 5.062655499842837e-31,
+        "replans_event+pred_mean": 5.614583333333333,
+        "replans_cycle_mean": 53.973958333333336,
+        "collision_free": {
+          "event+pred_rate": 0.671875,
+          "cycle_rate": 0.6979166666666666,
+          "only_event+pred_safe": 16,
+          "only_cycle_safe": 21,
+          "mcnemar_exact_p": 0.5113757815852296
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 0.36484374999999886,
+        "time_to_goal_wilcoxon_p": 3.9869924169418034e-13,
+        "time_to_goal_pairs": 192
+      }
+    }
+  },
+  "perturbed": {
+    "voronoi": {
+      "n_scenarios": 57,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 14.23893647351201,
+        "planning_time_cycle_over_event_iqr": [
+          7.085844108460622,
+          20.434663264735804
+        ],
+        "planning_time_wilcoxon_p": 9.253408697075217e-10,
+        "replans_event_mean": 25.94736842105263,
+        "replans_cycle_mean": 271.7368421052632,
+        "collision_free": {
+          "event_rate": 0.9649122807017544,
+          "cycle_rate": 0.8771929824561403,
+          "only_event_safe": 5,
+          "only_cycle_safe": 0,
+          "mcnemar_exact_p": 0.0625
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 1.305999999999998,
+        "time_to_goal_wilcoxon_p": 4.937534286101276e-07,
+        "time_to_goal_pairs": 50
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.30304285792267793,
+        "planning_time_once_over_event_iqr": [
+          0.24398053557780022,
+          0.446847532186331
+        ],
+        "planning_time_wilcoxon_p": 5.143753751233159e-11,
+        "replans_event_mean": 25.94736842105263,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.9649122807017544,
+          "once_rate": 0.631578947368421,
+          "only_event_safe": 19,
+          "only_once_safe": 0,
+          "mcnemar_exact_p": 3.814697265625e-06
+        },
+        "time_to_goal_event_minus_once_s_mean": -2.1899382716048965,
+        "time_to_goal_wilcoxon_p": 1.6253834105727728e-10,
+        "time_to_goal_pairs": 54
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 0.5902655988115426,
+        "planning_time_event_over_event+pred_iqr": [
+          0.3649363512115115,
+          0.8819333085696968
+        ],
+        "planning_time_wilcoxon_p": 3.6013547691814183e-07,
+        "replans_event+pred_mean": 58.24561403508772,
+        "replans_event_mean": 25.94736842105263,
+        "collision_free": {
+          "event+pred_rate": 0.8245614035087719,
+          "event_rate": 0.9649122807017544,
+          "only_event+pred_safe": 1,
+          "only_event_safe": 9,
+          "mcnemar_exact_p": 0.021484375
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.7067901234567942,
+        "time_to_goal_wilcoxon_p": 5.731013334360998e-05,
+        "time_to_goal_pairs": 54
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 8.744652272731319,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          5.129123125912318,
+          15.024152742931133
+        ],
+        "planning_time_wilcoxon_p": 5.602181910056666e-10,
+        "replans_event+pred_mean": 58.24561403508772,
+        "replans_cycle+pred_mean": 460.35087719298247,
+        "collision_free": {
+          "event+pred_rate": 0.8245614035087719,
+          "cycle+pred_rate": 0.7543859649122807,
+          "only_event+pred_safe": 9,
+          "only_cycle+pred_safe": 5,
+          "mcnemar_exact_p": 0.4239501953125
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 1.5007407407407414,
+        "time_to_goal_wilcoxon_p": 1.0612649227831302e-07,
+        "time_to_goal_pairs": 45
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 7.338627326389226,
+        "planning_time_cycle_over_event+pred_iqr": [
+          4.310102876459941,
+          12.082896367806137
+        ],
+        "planning_time_wilcoxon_p": 7.965254238902933e-10,
+        "replans_event+pred_mean": 58.24561403508772,
+        "replans_cycle_mean": 271.7368421052632,
+        "collision_free": {
+          "event+pred_rate": 0.8245614035087719,
+          "cycle_rate": 0.8771929824561403,
+          "only_event+pred_safe": 4,
+          "only_cycle_safe": 7,
+          "mcnemar_exact_p": 0.548828125
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 2.0903333333333376,
+        "time_to_goal_wilcoxon_p": 2.3080204414327454e-11,
+        "time_to_goal_pairs": 50
+      }
+    },
+    "prm": {
+      "n_scenarios": 51,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 13.933128899779671,
+        "planning_time_cycle_over_event_iqr": [
+          9.432007635662291,
+          20.30969237430275
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event_mean": 4.196078431372549,
+        "replans_cycle_mean": 116.31372549019608,
+        "collision_free": {
+          "event_rate": 0.9215686274509803,
+          "cycle_rate": 0.9215686274509803,
+          "only_event_safe": 2,
+          "only_cycle_safe": 2,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 0.45065359477124034,
+        "time_to_goal_wilcoxon_p": 1.6500578610575184e-06,
+        "time_to_goal_pairs": 51
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.39061939110885496,
+        "planning_time_once_over_event_iqr": [
+          0.2662720810187198,
+          0.48428489219896415
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event_mean": 4.196078431372549,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.9215686274509803,
+          "once_rate": 0.47058823529411764,
+          "only_event_safe": 25,
+          "only_once_safe": 2,
+          "mcnemar_exact_p": 5.647540092468262e-06
+        },
+        "time_to_goal_event_minus_once_s_mean": -0.6892156862745153,
+        "time_to_goal_wilcoxon_p": 3.95520219878138e-07,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 1.1493962267934565,
+        "planning_time_event_over_event+pred_iqr": [
+          0.8724492874402232,
+          1.4690680255708854
+        ],
+        "planning_time_wilcoxon_p": 0.06899498935726181,
+        "replans_event+pred_mean": 3.2941176470588234,
+        "replans_event_mean": 4.196078431372549,
+        "collision_free": {
+          "event+pred_rate": 0.9803921568627451,
+          "event_rate": 0.9215686274509803,
+          "only_event+pred_safe": 4,
+          "only_event_safe": 1,
+          "mcnemar_exact_p": 0.375
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.7297385620915008,
+        "time_to_goal_wilcoxon_p": 1.0317918130929133e-05,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 12.176077138812953,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          10.862932480042682,
+          14.828390479137841
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event+pred_mean": 3.2941176470588234,
+        "replans_cycle+pred_mean": 99.19607843137256,
+        "collision_free": {
+          "event+pred_rate": 0.9803921568627451,
+          "cycle+pred_rate": 1.0,
+          "only_event+pred_safe": 0,
+          "only_cycle+pred_safe": 1,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 0.915032679738559,
+        "time_to_goal_wilcoxon_p": 9.478731779363457e-09,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 15.13582998226983,
+        "planning_time_cycle_over_event+pred_iqr": [
+          11.72129775732931,
+          21.256722658096276
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event+pred_mean": 3.2941176470588234,
+        "replans_cycle_mean": 116.31372549019608,
+        "collision_free": {
+          "event+pred_rate": 0.9803921568627451,
+          "cycle_rate": 0.9215686274509803,
+          "only_event+pred_safe": 4,
+          "only_cycle_safe": 1,
+          "mcnemar_exact_p": 0.375
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 1.180392156862741,
+        "time_to_goal_wilcoxon_p": 2.1635752137823752e-09,
+        "time_to_goal_pairs": 51
+      }
+    },
+    "visibility": {
+      "n_scenarios": 51,
+      "event_vs_cycle": {
+        "planning_time_cycle_over_event_median_ratio": 5.056167273012932,
+        "planning_time_cycle_over_event_iqr": [
+          4.289926173181202,
+          6.503320129997397
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event_mean": 44.98039215686274,
+        "replans_cycle_mean": 240.23529411764707,
+        "collision_free": {
+          "event_rate": 0.0,
+          "cycle_rate": 0.0,
+          "only_event_safe": 0,
+          "only_cycle_safe": 0,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event_minus_cycle_s_mean": 0.09477124183006509,
+        "time_to_goal_wilcoxon_p": 0.01589098312928806,
+        "time_to_goal_pairs": 51
+      },
+      "event_vs_once": {
+        "planning_time_once_over_event_median_ratio": 0.06720845151687745,
+        "planning_time_once_over_event_iqr": [
+          0.051798725509082655,
+          0.08864433731774374
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event_mean": 44.98039215686274,
+        "replans_once_mean": 0.0,
+        "collision_free": {
+          "event_rate": 0.0,
+          "once_rate": 0.0,
+          "only_event_safe": 0,
+          "only_once_safe": 0,
+          "mcnemar_exact_p": 1.0
+        },
+        "time_to_goal_event_minus_once_s_mean": 0.0953594771241728,
+        "time_to_goal_wilcoxon_p": 0.022738348365713097,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_event": {
+        "planning_time_event_over_event+pred_median_ratio": 1.089876693303456,
+        "planning_time_event_over_event+pred_iqr": [
+          0.9148531185393629,
+          1.3188265982248415
+        ],
+        "planning_time_wilcoxon_p": 0.058299339416412216,
+        "replans_event+pred_mean": 39.450980392156865,
+        "replans_event_mean": 44.98039215686274,
+        "collision_free": {
+          "event+pred_rate": 0.0392156862745098,
+          "event_rate": 0.0,
+          "only_event+pred_safe": 2,
+          "only_event_safe": 0,
+          "mcnemar_exact_p": 0.5
+        },
+        "time_to_goal_event+pred_minus_event_s_mean": 0.15392156862745046,
+        "time_to_goal_wilcoxon_p": 0.04154586431450709,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_cycle+pred": {
+        "planning_time_cycle+pred_over_event+pred_median_ratio": 4.666231668999813,
+        "planning_time_cycle+pred_over_event+pred_iqr": [
+          3.5751492665866653,
+          5.4173099691653235
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event+pred_mean": 39.450980392156865,
+        "replans_cycle+pred_mean": 192.8235294117647,
+        "collision_free": {
+          "event+pred_rate": 0.0392156862745098,
+          "cycle+pred_rate": 0.0,
+          "only_event+pred_safe": 2,
+          "only_cycle+pred_safe": 0,
+          "mcnemar_exact_p": 0.5
+        },
+        "time_to_goal_event+pred_minus_cycle+pred_s_mean": 0.1944444444444438,
+        "time_to_goal_wilcoxon_p": 0.0036422504667310133,
+        "time_to_goal_pairs": 51
+      },
+      "event+pred_vs_cycle": {
+        "planning_time_cycle_over_event+pred_median_ratio": 5.678338112642657,
+        "planning_time_cycle_over_event+pred_iqr": [
+          4.927907728801495,
+          7.048522060897694
+        ],
+        "planning_time_wilcoxon_p": 5.145276051717656e-10,
+        "replans_event+pred_mean": 39.450980392156865,
+        "replans_cycle_mean": 240.23529411764707,
+        "collision_free": {
+          "event+pred_rate": 0.0392156862745098,
+          "cycle_rate": 0.0,
+          "only_event+pred_safe": 2,
+          "only_cycle_safe": 0,
+          "mcnemar_exact_p": 0.5
+        },
+        "time_to_goal_event+pred_minus_cycle_s_mean": 0.24869281045751557,
+        "time_to_goal_wilcoxon_p": 0.0009030015837618913,
+        "time_to_goal_pairs": 51
+      }
+    }
+  }
+}

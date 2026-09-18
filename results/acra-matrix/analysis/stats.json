@@ -1,0 +1,280 @@
+{
+  "excluded_initial_plan_failures": [
+    [
+      "22.11.24.08.2026~p002",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p002",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p006",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p012",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "prm"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "visibility"
+    ],
+    [
+      "22.11.24.08.2026~p019",
+      "voronoi"
+    ],
+    [
+      "crowded~p001",
+      "prm"
+    ],
+    [
+      "crowded~p001",
+      "visibility"
+    ],
+    [
+      "crowded~p003",
+      "prm"
+    ],
+    [
+      "crowded~p003",
+      "visibility"
+    ],
+    [
+      "crowded~p008",
+      "prm"
+    ],
+    [
+      "crowded~p008",
+      "visibility"
+    ],
+    [
+      "crowded~p008",
+      "voronoi"
+    ],
+    [
+      "crowded~p011",
+      "prm"
+    ],
+    [
+      "crowded~p011",
+      "visibility"
+    ],
+    [
+      "crowded~p017",
+      "prm"
+    ],
+    [
+      "crowded~p017",
+      "visibility"
+    ],
+    [
+      "crowded~p017",
+      "voronoi"
+    ],
+    [
+      "random-s0-0021",
+      "prm"
+    ],
+    [
+      "random-s0-0021",
+      "visibility"
+    ],
+    [
+      "random-s0-0083",
+      "prm"
+    ],
+    [
+      "random-s0-0083",
+      "visibility"
+    ],
+    [
+      "random-s0-0083",
+      "voronoi"
+    ],
+    [
+      "random-s0-0154",
+      "prm"
+    ],
+    [
+      "random-s0-0154",
+      "visibility"
+    ],
+    [
+      "random-s0-0173",
+      "prm"
+    ],
+    [
+      "random-s0-0173",
+      "visibility"
+    ],
+    [
+      "random-s0-0193",
+      "prm"
+    ],
+    [
+      "random-s0-0193",
+      "visibility"
+    ]
+  ],
+  "random": {
+    "voronoi": {
+      "n_scenarios": 199,
+      "planning_time_cycle_over_event_median_ratio": 4.342223175574995,
+      "planning_time_cycle_over_event_iqr": [
+        1.8474511668760871,
+        7.20890380608507
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 3.083522034858654e-31,
+      "replans_event_mean": 2.4974874371859297,
+      "replans_cycle_mean": 36.64824120603015,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 48,
+        "once_only_safe": 5,
+        "mcnemar_exact_p": 7.077378683106872e-10
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 8,
+        "cycle_only_safe": 8,
+        "mcnemar_exact_p": 1.0
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 5.088944080738528e-08,
+      "time_to_goal_pairs": 199
+    },
+    "prm": {
+      "n_scenarios": 195,
+      "planning_time_cycle_over_event_median_ratio": 8.262931402949373,
+      "planning_time_cycle_over_event_iqr": [
+        6.5863848705085175,
+        12.753086533220781
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 9.482403857733062e-34,
+      "replans_event_mean": 1.5435897435897437,
+      "replans_cycle_mean": 32.52820512820513,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 56,
+        "once_only_safe": 3,
+        "mcnemar_exact_p": 1.189326415129699e-13
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 5,
+        "cycle_only_safe": 6,
+        "mcnemar_exact_p": 1.0
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 1.2161360822934405e-05,
+      "time_to_goal_pairs": 195
+    },
+    "visibility": {
+      "n_scenarios": 195,
+      "planning_time_cycle_over_event_median_ratio": 4.035370640769833,
+      "planning_time_cycle_over_event_iqr": [
+        2.672716548443531,
+        12.525584521162262
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 9.482403857733062e-34,
+      "replans_event_mean": 7.3076923076923075,
+      "replans_cycle_mean": 53.37435897435898,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 24,
+        "once_only_safe": 7,
+        "mcnemar_exact_p": 0.003326892852783203
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 1,
+        "cycle_only_safe": 4,
+        "mcnemar_exact_p": 0.375
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 0.0012388033496848708,
+      "time_to_goal_pairs": 195
+    }
+  },
+  "perturbed": {
+    "voronoi": {
+      "n_scenarios": 57,
+      "planning_time_cycle_over_event_median_ratio": 15.770357874204118,
+      "planning_time_cycle_over_event_iqr": [
+        7.487421914126387,
+        21.118806663446914
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 8.373887572893727e-10,
+      "replans_event_mean": 25.94736842105263,
+      "replans_cycle_mean": 271.7368421052632,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 19,
+        "once_only_safe": 0,
+        "mcnemar_exact_p": 3.814697265625e-06
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 5,
+        "cycle_only_safe": 0,
+        "mcnemar_exact_p": 0.0625
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.6666666666666641,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 4.937534286101276e-07,
+      "time_to_goal_pairs": 50
+    },
+    "prm": {
+      "n_scenarios": 51,
+      "planning_time_cycle_over_event_median_ratio": 15.106662953677835,
+      "planning_time_cycle_over_event_iqr": [
+        9.776128534789754,
+        19.983754075900688
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 5.145276051717656e-10,
+      "replans_event_mean": 4.196078431372549,
+      "replans_cycle_mean": 116.31372549019608,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 25,
+        "once_only_safe": 2,
+        "mcnemar_exact_p": 5.647540092468262e-06
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 2,
+        "cycle_only_safe": 2,
+        "mcnemar_exact_p": 1.0
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.14999999999999955,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 1.6500578610575184e-06,
+      "time_to_goal_pairs": 51
+    },
+    "visibility": {
+      "n_scenarios": 51,
+      "planning_time_cycle_over_event_median_ratio": 5.033242563429612,
+      "planning_time_cycle_over_event_iqr": [
+        4.36656047925114,
+        6.285894081273225
+      ],
+      "planning_time_event_vs_cycle_wilcoxon_p": 5.145276051717656e-10,
+      "replans_event_mean": 44.98039215686274,
+      "replans_cycle_mean": 240.23529411764707,
+      "collision_free_event_vs_once": {
+        "event_only_safe": 0,
+        "once_only_safe": 0,
+        "mcnemar_exact_p": 1.0
+      },
+      "collision_free_event_vs_cycle": {
+        "event_only_safe": 0,
+        "cycle_only_safe": 0,
+        "mcnemar_exact_p": 1.0
+      },
+      "time_to_goal_event_minus_cycle_s_median": 0.0,
+      "time_to_goal_event_vs_cycle_wilcoxon_p": 0.01589098312928806,
+      "time_to_goal_pairs": 51
+    }
+  }
+}

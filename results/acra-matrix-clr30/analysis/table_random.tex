@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Random scenarios ($n=200$ scenarios, 3 robots, 60\,Hz control). Median planning time per run and median of the per-run largest single call.}
+\label{tab:random}
+\begin{tabular}{llrrrrr}
+\hline
+Planner & Policy & Coll.-free (\%) & Replans & Plan.\ time (ms) & Max call (ms) & Goal (s) \\
+\hline
+Voronoi & Plan once & 68 & 0.0 & 4 & 3.9 & 4.44 \\
+Voronoi & Every cycle & 92 & 39.9 & 98 & 4.2 & 2.65 \\
+Voronoi & Event-triggered & 89 & 1.9 & 20 & 4.0 & 2.72 \\
+PRM & Plan once & 63 & 0.0 & 7 & 6.4 & 3.40 \\
+PRM & Every cycle & 95 & 36.9 & 204 & 6.9 & 2.60 \\
+PRM & Event-triggered & 94 & 1.8 & 20 & 6.5 & 2.67 \\
+Visibility graph & Plan once & 71 & 0.0 & 9 & 8.7 & 2.96 \\
+Visibility graph & Every cycle & 85 & 63.4 & 413 & 10.2 & 2.73 \\
+Visibility graph & Event-triggered & 84 & 7.7 & 50 & 9.1 & 2.77 \\
+\hline
+\end{tabular}
+\end{table}
