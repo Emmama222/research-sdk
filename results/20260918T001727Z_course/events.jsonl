@@ -1,3 +1,0 @@
-{"timestamp_utc":"2026-09-18T00:17:27.941832+00:00","event":"run_started","scenario":"course","planner":"Planner B"}
-{"timestamp_utc":"2026-09-18T00:17:27.942430+00:00","event":"execution_metadata","run_id":"run-20260918T001727-a15071","run_kind":"experiment","parent_run_id":null,"checkpoint_id":null}
-{"timestamp_utc":"2026-09-18T00:17:27.950175+00:00","event":"metrics_finalized","completed":false,"format_a":{"input_latency_ms":"","mapping_time_ms":"","planning_time_ms":0,"number_of_fails":0},"format_b":{"input_latency_ms":"","average_planner_execution_time_ms":"","robot_arrival_time_ms":"","total_plans_made":0,"number_of_collisions":0,"resources_used":15.625}}
