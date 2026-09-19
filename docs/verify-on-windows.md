@@ -69,12 +69,15 @@ outputs were committed; that is expected and the numbers in the tables do not
 move. Run `git checkout -- results` afterwards. Needs `pandas`, `scipy` and
 `matplotlib` in the interpreter.
 
-## 4. What cannot be verified on Windows
+## 4. The native physics backend on Windows
 
-`--backend grsim`, the native ODE physics, needs the grSim build in `.local/`
-that `scripts/build_grsim.sh` produces on Ubuntu or WSL, plus Xvfb. Run it from
-WSL as `docs/physics.md` describes; `scripts/physics.ps1` launches that from
-PowerShell.
+`--backend grsim`, the native ODE physics, now runs against a Windows-built
+grSim with no WSL and no Xvfb: see "Native Windows build" in
+`docs/physics.md` for the MSYS2 recipe and the `record_grsim_build.py`
+stamp. With `RESEARCH_RUN_PHYSICS=1` and `RESEARCH_GRSIM_BIN` pointing at
+`%USERPROFILE%\grsim\install\bin\grSim.exe`, `tests/test_grsim_physics.py`
+reports `17 passed` (the three native tests included, 10 s) on 19 September
+2026. `scripts/physics.ps1` remains the route for a build living in WSL.
 
 `analyse_canonical.py` cannot run on any `acra-*` batch on any platform until
 `acra-6v6-patrol` is re-run with the current runner; see `results/README.md`.

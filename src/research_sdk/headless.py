@@ -1372,7 +1372,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trials", type=int, default=1, help="Trials per scenario/planner")
     parser.add_argument("--seed", type=int, default=0, help="Base PRM random seed")
     parser.add_argument("--backend", choices=("kinematic", "grsim"), default="kinematic")
-    parser.add_argument("--grsim-bin", type=Path, default=Path(".local/grsim/bin/grSim"))
+    parser.add_argument(
+        "--grsim-bin",
+        type=Path,
+        default=Path(os.environ.get("RESEARCH_GRSIM_BIN", ".local/grsim/bin/grSim")),
+        help="grSim executable (default: $RESEARCH_GRSIM_BIN, else the Linux build in .local/)",
+    )
     parser.add_argument(
         "--dt-ms", type=float, default=None, help="Step in ms (default: kinematic 20, grSim 8.3333)"
     )
