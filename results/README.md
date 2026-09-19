@@ -16,6 +16,16 @@ wrote which. The `runs.csv` column count is the tell: it grew from 40 to 64 as
 | `acra-6v6-patrol` | 7800 | 200 | 0 | 61 | no | 17 Sep |
 | `acra-clearance-sweep` | 12000 | 200 | swept | 62 | no | 18 Sep |
 | `headless/20260918T092542606739Z` | 600 | 1 | recorded | 64 | **yes** | 18 Sep |
+| `acra-6v6-patrol-rerun` | 7800 | 200 | 0 | 64 | **yes** | 20 Sep |
+
+`acra-6v6-patrol-rerun` is `acra-6v6-patrol` made again with the current
+runner (manifest `code_revision` d0466d0, clean tree, Windows Python 3.13,
+8 workers, 12 minutes): the same generator parameters and seed, so its 200
+scenarios equal the original's `scenarios.tar.gz` once parsed (200 of 200;
+the files differ only in line endings, CRLF from the Windows run), the same
+planners, policies, horizons and periods, and 7800 runs. It carries the
+DEC-008 attribution columns, so `analyse_canonical.py` runs on it; its
+`analysis/` holds that script's `surface.csv` and `report.json`.
 
 Clearance is the planning margin added to robot radius plus obstacle radius.
 The two 2367-run matrices are the same design at 0 and 30 mm; their `runs.csv`
@@ -28,13 +38,15 @@ horizon after the fact.
 |---|---|---|
 | `scripts/analyse_matrix.py` | planner x policy rows | `acra-matrix*` |
 | `scripts/analyse_sweep.py` | horizon x period rows | `acra-sweep-patrol`, `acra-6v6-patrol`, `acra-clearance-sweep` |
-| `scripts/analyse_canonical.py` | `obstacle_episodes_robot_initiated` and `_obstacle_initiated` columns (DEC-008) | **none of the `acra-*` batches** |
+| `scripts/analyse_canonical.py` | `obstacle_episodes_robot_initiated` and `_obstacle_initiated` columns (DEC-008) | `acra-6v6-patrol-rerun` only |
 
 `analyse_canonical.py` exits with "runs.csv predates DEC-008 attribution" on
-`acra-6v6-patrol`, the batch it was written for. The safety metric it defines,
-zero robot-initiated contacts, needs a re-run of that batch with the current
-runner. Only the 600-run single-scenario batch under `headless/` carries the
-columns, and it is a check of the runner, not a comparison.
+`acra-6v6-patrol`, the batch it was written for, and on every other `acra-*`
+batch. The safety metric it defines, zero robot-initiated contacts, is
+available from `acra-6v6-patrol-rerun` (20 September), which repeats that
+batch's design with the current runner. The 600-run single-scenario batch
+under `headless/` also carries the columns, and it is a check of the runner,
+not a comparison.
 
 ## Do the committed tables reproduce?
 
