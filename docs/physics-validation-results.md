@@ -54,3 +54,27 @@ These results validate behavior within the recorded grSim model, not equivalence
 to a particular physical robot. The contact metric is sampled circular proximity,
 not an export of ODE contact forces. Hardware-specific claims still require model
 calibration and physical measurements.
+
+## Re-verification: 18 September 2026
+
+Run from a clean worktree of `Emmama/headless-physics` at `a33bf8a`, before any
+code change in this commit.
+
+| environment | command | result |
+| --- | --- | --- |
+| WSL Ubuntu, Python 3.14.4, PySide6 present | `pytest tests -q` | 249 passed, 3 skipped (the opt-in native tests) |
+| Windows, Python 3.13.15, PySide6 6.11.2 | `pytest tests/test_ui_runtime.py -q` | 19 passed |
+
+The three `test_ui_runtime.py` failures recorded above did not reproduce in
+either environment, and the Windows interpreter used here does have PySide6, so
+both GUI modules collect. If they still fail on the original machine, the exact
+command, interpreter path and output are needed to go further.
+
+Regenerating the committed analyses from the committed `runs.csv` files
+(`analyse_matrix.py` on the three `acra-matrix*` batches, `analyse_sweep.py` on
+`acra-sweep-patrol`) reproduces every LaTeX table byte for byte apart from line
+endings. The CSV and `stats.json` side outputs differ because the analysis
+scripts gained columns and statistics after those outputs were committed; the
+numbers in the tables are unchanged. `analyse_canonical.py` cannot run on any
+`acra-*` batch: they predate the robot-initiated contact columns it requires.
+See `results/README.md`.
