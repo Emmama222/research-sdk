@@ -413,6 +413,9 @@ class ExecutionConsolePage(QWidget):
         self.result_rows_b: list[dict] = []
         self.recorder: ExperimentRecorder | None = None
         self.run_id = ""
+        # Scenario files opened through Browse... that live outside the store
+        # folder. Kept so Refresh rebuilds the list without dropping them.
+        self.browsed_paths: list[str] = []
         self.run_started_at: float | None = None
         self._stepping = False
         self._motion_test_key: tuple[bool, int] | None = None
@@ -486,17 +489,23 @@ class ExecutionConsolePage(QWidget):
 
         self.scenario_selector = QComboBox()
         self.refresh_button = QPushButton("Refresh")
+        self.browse_button = QPushButton("Browse...")
+        self.browse_button.setToolTip(
+            "Open a scenario JSON file from anywhere on disk, for example one "
+            "inside a results folder"
+        )
         self.add_scenario_button = QPushButton("Add Scenario")
         self.load_button = QPushButton("Load Scenario")
         self.unload_button = QPushButton("Unload Scenario")
         self.apply_button = QPushButton("Load scenario into grSim")
         scenario_controls = QGridLayout()
-        scenario_controls.addWidget(self.scenario_selector, 0, 0)
-        scenario_controls.addWidget(self.refresh_button, 0, 1)
-        scenario_controls.addWidget(self.add_scenario_button, 1, 0)
-        scenario_controls.addWidget(self.load_button, 1, 1)
-        scenario_controls.addWidget(self.unload_button, 2, 0, 1, 2)
-        scenario_controls.addWidget(self.apply_button, 3, 0, 1, 2)
+        scenario_controls.addWidget(self.scenario_selector, 0, 0, 1, 2)
+        scenario_controls.addWidget(self.refresh_button, 1, 0)
+        scenario_controls.addWidget(self.browse_button, 1, 1)
+        scenario_controls.addWidget(self.add_scenario_button, 2, 0)
+        scenario_controls.addWidget(self.load_button, 2, 1)
+        scenario_controls.addWidget(self.unload_button, 3, 0, 1, 2)
+        scenario_controls.addWidget(self.apply_button, 4, 0, 1, 2)
         scenario_widget = QWidget()
         scenario_widget.setLayout(scenario_controls)
         top.addWidget(scenario_widget, 0, 2, 3, 1)
@@ -638,6 +647,7 @@ class ExecutionConsolePage(QWidget):
         self.vision_test_button.clicked.connect(self._vision_test)
         self.motion_test_button.clicked.connect(self._motion_test)
         self.refresh_button.clicked.connect(self.refresh_scenarios)
+        self.browse_button.clicked.connect(self._browse_scenario)
         self.add_scenario_button.clicked.connect(self.navigate_to_planner.emit)
         self.load_button.clicked.connect(self._load_scenario)
         self.unload_button.clicked.connect(self._unload_scenario)
@@ -732,11 +742,76 @@ class ExecutionConsolePage(QWidget):
         paths = self.store.list_paths()
         for path in paths:
             self.scenario_selector.addItem(path.stem, str(path))
+        # A browsed file that has since been moved or deleted is dropped
+        # rather than left in the list as an entry that cannot load.
+        self.browsed_paths = [text for text in self.browsed_paths if Path(text).is_file()]
+        for text in self.browsed_paths:
+            self.scenario_selector.addItem(self._browsed_label(Path(text)), text)
         if selected:
             index = self.scenario_selector.findData(selected)
             if index >= 0:
                 self.scenario_selector.setCurrentIndex(index)
-        self._log_debug(f"[SCENARIO] refreshed scenario list: {len(paths)} available")
+        self._log_debug(
+            f"[SCENARIO] refreshed scenario list: {len(paths)} available"
+            + (f", {len(self.browsed_paths)} browsed" if self.browsed_paths else "")
+        )
+
+    def _browsed_label(self, path: Path) -> str:
+        """Label a browsed file by its parent folder as well as its name.
+
+        Every run folder holds scenarios with the same generated names
+        (``random-s0-0145`` and friends), so the stem alone cannot tell two
+        of them apart in the selector.
+        """
+        return f"{path.stem} - {path.parent.name}"
+
+    def _browse_scenario(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open scenario file",
+            str(self.store.folder),
+            "Scenario files (*.json);;All files (*)",
+        )
+        if not path_text:
+            return
+        self.add_browsed_scenario(path_text)
+
+    def add_browsed_scenario(self, path_text: str | Path) -> None:
+        """Put a scenario file in the selector and select it.
+
+        Separate from ``_browse_scenario`` so the dialog stays out of the
+        way of tests and of any caller that already has a path.
+        """
+        path = Path(path_text)
+        data = str(path)
+        # The dialog hands back an absolute path, while the store lists
+        # relative ones, so compare what the two paths actually point at
+        # rather than their spelling -- otherwise picking a file that is
+        # already in the list adds a second entry for it.
+        index = self._selector_index_for(path)
+        if index < 0:
+            if data not in self.browsed_paths:
+                self.browsed_paths.append(data)
+            self.scenario_selector.addItem(self._browsed_label(path), data)
+            index = self.scenario_selector.count() - 1
+        self.scenario_selector.setCurrentIndex(index)
+        self._log_debug(f"[SCENARIO] opened file: {path}")
+
+    def _selector_index_for(self, path: Path) -> int:
+        try:
+            target = path.resolve()
+        except OSError:
+            return self.scenario_selector.findData(str(path))
+        for index in range(self.scenario_selector.count()):
+            data = self.scenario_selector.itemData(index)
+            if not data:
+                continue
+            try:
+                if Path(data).resolve() == target:
+                    return index
+            except OSError:
+                continue
+        return -1
 
     def _load_scenario(self) -> None:
         path_text = self.scenario_selector.currentData()

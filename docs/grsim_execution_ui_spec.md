@@ -90,6 +90,7 @@ COMPLETED / STOPPED / ERROR
 | Control | Enabled states | Effect |
 | --- | --- | --- |
 | Refresh scenarios | `NO_SCENARIO`, `SCENARIO_LOADED`, `READY` | Rescan scenario JSON files in the workspace. |
+| Browse... | `NO_SCENARIO`, `SCENARIO_LOADED`, `READY` | Open a scenario JSON file from anywhere on disk and add it to the selector. |
 | Load scenario | `NO_SCENARIO`, `SCENARIO_LOADED`, `READY` | Load the selected scenario locally; does not send packets. |
 | Load scenario into grSim | `SCENARIO_LOADED` | Send replacement state and enter `APPLYING`. |
 | Planner checkbox | `READY` only | Enable/disable shadow planning. Locked after any Run until Reset E-Stop. |
@@ -109,6 +110,13 @@ owns the authoritative state.
 The scenario selector lists available workspace scenario JSON files. Refresh
 rescans the scenario folder. Add Scenario navigates to the Scenario Planner
 tab rather than creating or editing a course on this page.
+
+**Browse...** opens a file dialog rooted at the scenario folder and adds the
+chosen file to the selector without copying it into the workspace. This is how
+a scenario that only exists inside a results folder -- a generated
+`random-s<seed>-<index>` case, for instance -- is reopened. Browsed entries are
+labeled `<name> - <parent folder>`, because run folders repeat the same
+generated names, and they survive Refresh unless the file has gone away.
 
 Loading a scenario is local. **Load scenario into grSim** performs application:
 
