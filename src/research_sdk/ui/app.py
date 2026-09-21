@@ -278,7 +278,10 @@ class FieldCanvas(QWidget):
                     -radius * sin(robot.orientation_rad),
                 ),
             )
-            painter.drawText(centre + QPointF(-4, 5), str(robot.robot_id))
+            painter.drawText(
+                centre + QPointF(-6, 5),
+                f"{'Y' if robot.is_yellow else 'B'}{robot.robot_id}",
+            )
         if self.live_ball_mm is not None:
             centre = self._to_screen(self.live_ball_mm)
             ball_radius = max(4.0, 21.5 * self._field_rect().width() / FIELD_LENGTH_MM)
@@ -322,14 +325,26 @@ class FieldCanvas(QWidget):
             painter.drawEllipse(target, radius, radius)
             painter.drawLine(start, target)
         painter.setPen(QColor("#101820"))
-        painter.drawText(start + QPointF(-4, 5), str(robot.robot_id))
+        painter.drawText(
+            start + QPointF(-6, 5),
+            f"{'Y' if robot.is_yellow else 'B'}{robot.robot_id}",
+        )
 
     def _draw_obstacle(self, painter: QPainter, obstacle: ScenarioObstacle) -> None:
         centre = self._to_screen(obstacle.position_mm)
         radius = obstacle.radius_mm * self._field_rect().width() / FIELD_LENGTH_MM
         painter.setBrush(QColor(220, 70, 70, 180))
-        painter.setPen(QPen(QColor("#ff8a80"), 2))
+        # Ring carries the team; the red fill keeps obstacles distinct from
+        # planned robots, which are drawn in team colour.
+        painter.setPen(QPen(QColor("#ffd740" if obstacle.is_yellow else "#42a5f5"), 2))
         painter.drawEllipse(centre, radius, radius)
+        # Obstacle and robot ids both start at 0, so the team letter is what
+        # makes a label unambiguous.
+        painter.setPen(QPen(QColor("#fff3e0"), 1))
+        painter.drawText(
+            centre + QPointF(-6, 4),
+            f"{'Y' if obstacle.is_yellow else 'B'}{obstacle.obstacle_id}",
+        )
 
     def _draw_paths(self, painter: QPainter) -> None:
         painter.setBrush(Qt.NoBrush)

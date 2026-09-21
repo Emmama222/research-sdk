@@ -1239,6 +1239,47 @@ def summarize_results(
     return summaries
 
 
+def _provenance() -> dict:
+    """Record enough to tie these numbers to a version of the code.
+
+    Scenario files plus the generator seed make a batch regenerable only if the
+    code that consumed them is pinned too; without this a re-run can silently
+    differ because the patrol model or a planner changed underneath.
+    """
+    import platform
+    import subprocess
+    import sys
+
+    def _git(*args: str) -> str | None:
+        try:
+            root = Path(__file__).resolve().parents[2]
+            out = subprocess.run(
+                ("git", *args), cwd=root, capture_output=True, text=True, timeout=10
+            )
+            return (out.stdout.strip() or None) if out.returncode == 0 else None
+        except Exception:
+            return None
+
+    dirty = _git("status", "--porcelain")
+    versions: dict[str, str | None] = {}
+    for mod in ("numpy", "scipy", "networkx", "pandas"):
+        try:
+            versions[mod] = __import__(mod).__version__
+        except Exception:
+            versions[mod] = None
+
+    return {
+        "git_commit": _git("rev-parse", "HEAD"),
+        "git_branch": _git("rev-parse", "--abbrev-ref", "HEAD"),
+        "git_dirty": bool(dirty) if dirty is not None else None,
+        "git_dirty_file_count": len(dirty.splitlines()) if dirty else 0,
+        "python": sys.version.split()[0],
+        "platform": f"{platform.system()} {platform.release()} ({platform.machine()})",
+        "cpu_count": os.cpu_count(),
+        "packages": versions,
+    }
+
+
 def write_results(
     results: Sequence[HeadlessRunResult],
     destination: str | Path,
@@ -1260,6 +1301,7 @@ def write_results(
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "research_sdk.headless",
+        "provenance": _provenance(),
         "model": "See backend and evidence_directory for each run",
         "backends": sorted({result.backend for result in results}),
         "physics_equivalence": bool(results) and all(r.backend == "grsim" for r in results),
