@@ -9,7 +9,6 @@ from __future__ import annotations
 import csv
 import time
 from copy import deepcopy
-from dataclasses import replace
 from datetime import UTC, datetime
 from math import atan2, cos, hypot, sin
 from pathlib import Path
@@ -64,7 +63,6 @@ from research_sdk.config import (
 from research_sdk.network.robot_command import RobotCommand
 from research_sdk.planners.common import StepRecorder
 from research_sdk.ui.execution.apply_verifier import ApplyReport, ScenarioApplyVerifier
-from research_sdk.ui.execution.checkpoints import CheckpointRecord, CheckpointStore
 from research_sdk.ui.execution.controller import (
     ExecutionController,
     ExecutionInput,
@@ -73,7 +71,6 @@ from research_sdk.ui.execution.controller import (
 from research_sdk.ui.runtime import LiveRobot, PlannedRobotPath, ResearchRuntime
 from research_sdk.ui.scenarios import (
     Scenario,
-    ScenarioBall,
     ScenarioObstacle,
     ScenarioRobot,
     ScenarioStore,
@@ -415,16 +412,9 @@ class ExecutionConsolePage(QWidget):
         self.result_rows_a: list[dict] = []
         self.result_rows_b: list[dict] = []
         self.recorder: ExperimentRecorder | None = None
-        self.checkpoint_store: CheckpointStore | None = None
-        self.checkpoints: list[CheckpointRecord] = []
-        self.recorded_boundaries: set[tuple[bool, int, int]] = set()
         self.run_id = ""
-        self.run_kind = "experiment"
-        self.parent_run_id: str | None = None
-        self.source_checkpoint_id: str | None = None
         self.run_started_at: float | None = None
         self._stepping = False
-        self._pending_checkpoint: CheckpointRecord | None = None
         self._motion_test_key: tuple[bool, int] | None = None
         self._motion_test_start_theta: float | None = None
         self._motion_test_started_at: float | None = None
@@ -470,15 +460,11 @@ class ExecutionConsolePage(QWidget):
         transport = QHBoxLayout()
         self.run_button = QPushButton("Run")
         self.pause_button = QPushButton("Pause")
-        self.previous_step_button = QPushButton("Previous step")
         self.step_button = QPushButton("Step")
-        self.checkpoint_selector = QComboBox()
-        self.resume_checkpoint_button = QPushButton("Restart checkpoint")
         self.reset_button = QPushButton("Reset")
         for button in (
             self.run_button,
             self.pause_button,
-            self.previous_step_button,
             self.step_button,
             self.reset_button,
         ):
@@ -487,19 +473,16 @@ class ExecutionConsolePage(QWidget):
         transport_widget.setLayout(transport)
         top.addWidget(self.state_badge, 0, 1)
         top.addWidget(transport_widget, 1, 1)
-        checkpoint_row = QHBoxLayout()
-        self.checkpoint_label = QLabel("Last checkpoint")
-        checkpoint_row.addWidget(self.checkpoint_label)
-        checkpoint_row.addWidget(self.checkpoint_selector, 1)
-        checkpoint_row.addWidget(self.resume_checkpoint_button)
+        emergency_row = QHBoxLayout()
         self.emergency_button = QPushButton("EMERGENCY STOP")
         self.emergency_button.setStyleSheet(
             "background:#b71c1c;color:white;font-weight:800;font-size:12px;padding:4px 10px;"
         )
-        checkpoint_row.addWidget(self.emergency_button)
-        checkpoint_widget = QWidget()
-        checkpoint_widget.setLayout(checkpoint_row)
-        top.addWidget(checkpoint_widget, 2, 1)
+        emergency_row.addStretch(1)
+        emergency_row.addWidget(self.emergency_button)
+        emergency_widget = QWidget()
+        emergency_widget.setLayout(emergency_row)
+        top.addWidget(emergency_widget, 2, 1)
 
         self.scenario_selector = QComboBox()
         self.refresh_button = QPushButton("Refresh")
@@ -660,10 +643,8 @@ class ExecutionConsolePage(QWidget):
         self.unload_button.clicked.connect(self._unload_scenario)
         self.apply_button.clicked.connect(self._apply_scenario)
         self.pause_button.clicked.connect(self._pause)
-        self.previous_step_button.clicked.connect(self._previous_step)
         self.step_button.clicked.connect(self._step)
         self.run_button.clicked.connect(lambda checked=False: self._run_or_continue())
-        self.resume_checkpoint_button.clicked.connect(self._resume_checkpoint)
         self.reset_button.clicked.connect(self._reset)
         self.emergency_button.clicked.connect(lambda: self.emergency_stop())
         self.export_a_button.clicked.connect(lambda: self._export_table("a"))
@@ -682,7 +663,6 @@ class ExecutionConsolePage(QWidget):
         self.moving_buffers_toggle.toggled.connect(self._toggle_moving_obstacle_buffers)
         self.reroute_gate_checkbox.toggled.connect(self._toggle_reroute_gate)
         self.predict_motion_checkbox.toggled.connect(self._toggle_predict_motion)
-        self.checkpoint_selector.currentIndexChanged.connect(self._refresh_ui)
 
     def _toggle_map_layer(self, checked: bool) -> None:
         self.canvas.show_map_layer = checked
@@ -858,8 +838,6 @@ class ExecutionConsolePage(QWidget):
                 self._log_debug(f"[APPLY] {self._format_apply_report(report)}")
                 self.controller.confirm_apply()
                 self.verifier = None
-                if self._pending_checkpoint is not None:
-                    self._finish_checkpoint_restore()
                 self._refresh_ui()
             elif self.verifier.timed_out:
                 self._log_debug(f"[APPLY] {self._format_apply_report(report)}", level="ERROR")
@@ -951,20 +929,9 @@ class ExecutionConsolePage(QWidget):
             self._replan_frame_counter = 0
             self.current_metrics = deepcopy(self.metric_templates)
             self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
-            self.run_kind = "experiment"
-            self.parent_run_id = None
-            self.source_checkpoint_id = None
             self.run_started_at = time.perf_counter()
-            self.recorded_boundaries.clear()
             self.recorder = ExperimentRecorder(execution_input.scenario.name, planner)
-            self.recorder.record(
-                "execution_metadata",
-                run_id=self.run_id,
-                run_kind=self.run_kind,
-                parent_run_id=self.parent_run_id,
-                checkpoint_id=self.source_checkpoint_id,
-            )
-            self.checkpoint_store = CheckpointStore(self.recorder.path)
+            self.recorder.record("execution_metadata", run_id=self.run_id)
             for metrics in self.current_metrics.values():
                 metrics.start_execution()
             self.execution_timer.start()
@@ -1000,15 +967,6 @@ class ExecutionConsolePage(QWidget):
         except Exception as exc:
             self._fail(f"Continue failed: {exc}")
 
-    def _previous_step(self) -> None:
-        index = self.checkpoint_selector.currentIndex()
-        if index > 0:
-            self.checkpoint_selector.setCurrentIndex(index - 1)
-            self._log_debug(
-                f"[CHECKPOINT] selected previous checkpoint: "
-                f"{self.checkpoint_selector.currentText()}"
-            )
-
     def _step(self) -> None:
         try:
             self.runtime.step_execution()
@@ -1029,7 +987,6 @@ class ExecutionConsolePage(QWidget):
                 metrics.observe_robots(robots)
             completed = self.runtime.execute_tick(robots)
             self.canvas.waypoint_indices = self.runtime.waypoint_indices
-            self._record_transitions(self.runtime.last_waypoint_transitions)
             if self.runtime.step_completed:
                 self._stepping = False
             if completed:
@@ -1042,101 +999,7 @@ class ExecutionConsolePage(QWidget):
         except Exception as exc:
             self._fail(f"Fatal execution error: {exc}")
 
-    def _record_transitions(
-        self, transitions: tuple[tuple[tuple[bool, int], int], ...]
-    ) -> None:
-        path_lengths = {
-            (path.is_yellow, path.robot_id): len(path.points_mm)
-            for path in self.runtime.active_paths
-        }
-        new = [
-            (key, index)
-            for key, index in transitions
-            if (key[0], key[1], index) not in self.recorded_boundaries
-            # The final waypoint of a path means that robot has finished, not
-            # reached a resumable mid-run point, so it is not checkpoint-worthy.
-            and index < path_lengths.get(key, index + 1) - 1
-        ]
-        if not new or self.checkpoint_store is None or self.controller.execution_input is None:
-            return
-        snapshot = self.runtime.world_snapshot
-        if snapshot is None:
-            return
-        for key, index in new:
-            self.recorded_boundaries.add((key[0], key[1], index))
-        checkpoint = self._make_checkpoint(snapshot, new)
-        self.checkpoint_store.append(checkpoint)
-        self.checkpoints.append(checkpoint)
-        elapsed_ms = float(checkpoint.metrics["elapsed_ms"])
-        self.checkpoint_selector.addItem(
-            f"{elapsed_ms:.0f} ms · {checkpoint.checkpoint_id} · "
-            f"{checkpoint.triggers[0]['robot_key']}",
-            checkpoint.checkpoint_id,
-        )
-        self.checkpoint_selector.setCurrentIndex(self.checkpoint_selector.count() - 1)
-        trigger_text = ", ".join(
-            f"{item['robot_key']} waypoint {item['reached_waypoint_index']}"
-            for item in checkpoint.triggers
-        )
-        self._log_debug(
-            f"[CHECKPOINT] {elapsed_ms:.1f} ms since run: {trigger_text}; "
-            f"checkpoint saved as {checkpoint.checkpoint_id}"
-        )
 
-    def _make_checkpoint(
-        self,
-        snapshot: WorldSnapshot,
-        transitions: list[tuple[tuple[bool, int], int]],
-    ) -> CheckpointRecord:
-        execution_input = self.controller.execution_input
-        assert execution_input is not None
-        robots = tuple(
-            {
-                "is_yellow": robot.isYellow,
-                "robot_id": robot.robot_id,
-                "pose": [robot.x, robot.y, robot.theta],
-            }
-            for robot in (*snapshot.yellow, *snapshot.blue)
-            if robot is not None
-        )
-        indexes = {
-            f"{'Y' if key[0] else 'B'}{key[1]}": index
-            for key, index in self.runtime.waypoint_indices.items()
-        }
-        return CheckpointRecord.create(
-            run_id=self.run_id,
-            checkpoint_id=f"cp-{len(self.checkpoints) + 1:04d}",
-            parent_run_id=self.parent_run_id,
-            scenario_name=execution_input.scenario.name,
-            scenario_hash=execution_input.content_hash,
-            triggers=tuple(
-                {
-                    "robot_key": f"{'Y' if key[0] else 'B'}{key[1]}",
-                    "reached_waypoint_index": index,
-                }
-                for key, index in transitions
-            ),
-            robots=robots,
-            ball=(
-                None
-                if snapshot.ball is None
-                else {"position_mm": [snapshot.ball.x, snapshot.ball.y]}
-            ),
-            waypoint_indexes=indexes,
-            velocity_owner=self.controller.velocity_owner or "",
-            path_ids={
-                f"{'Y' if path.is_yellow else 'B'}{path.robot_id}": f"path-{path.robot_id}"
-                for path in self.runtime.active_paths
-            },
-            metrics={
-                "elapsed_ms": self._elapsed_ms(),
-                "collisions": max(
-                    (metric.number_of_collisions for metric in self.current_metrics.values()),
-                    default=0,
-                ),
-            },
-            state=self.controller.state.value,
-        )
 
     def _reset(self) -> None:
         execution_input = self.controller.execution_input
@@ -1144,10 +1007,6 @@ class ExecutionConsolePage(QWidget):
             return
         try:
             self.emergency_stop(finalize=True)
-            self.checkpoints.clear()
-            self.checkpoint_selector.clear()
-            self.recorded_boundaries.clear()
-            self._log_debug("[CHECKPOINT] checkpoint list cleared by reset")
             self.controller.begin_reset()
             self.verifier = ScenarioApplyVerifier(execution_input.scenario)
             self.runtime.apply_scenario(execution_input.scenario, include_obstacles=True)
@@ -1155,99 +1014,8 @@ class ExecutionConsolePage(QWidget):
         except Exception as exc:
             self._fail(f"Reset failed: {exc}")
 
-    def _resume_checkpoint(self) -> None:
-        checkpoint_id = self.checkpoint_selector.currentData()
-        if not checkpoint_id:
-            return
-        checkpoint = next(
-            (item for item in self.checkpoints if item.checkpoint_id == checkpoint_id), None
-        )
-        if checkpoint is None or self.controller.execution_input is None:
-            return
-        try:
-            if checkpoint.scenario_hash != self.controller.execution_input.content_hash:
-                raise ValueError("Checkpoint scenario does not match the loaded execution input")
-            self.emergency_stop(finalize=True)
-            self.controller.request_checkpoint_resume(checkpoint_id)
-            restored = self._scenario_from_checkpoint(checkpoint)
-            self._pending_checkpoint = checkpoint
-            self.verifier = ScenarioApplyVerifier(restored)
-            self.runtime.apply_scenario(restored, include_obstacles=True)
-            self._refresh_ui()
-        except Exception as exc:
-            self._fail(f"Checkpoint restore failed: {exc}")
 
-    def _scenario_from_checkpoint(self, checkpoint: CheckpointRecord) -> Scenario:
-        execution_input = self.controller.execution_input
-        assert execution_input is not None
-        by_key = {
-            (bool(item["is_yellow"]), int(item["robot_id"])): item["pose"]
-            for item in checkpoint.robots
-        }
-        scenario = execution_input.scenario
-        robots = [
-            replace(
-                robot,
-                start_mm=tuple(by_key[(robot.is_yellow, robot.robot_id)][:2]),
-                orientation_rad=float(by_key[(robot.is_yellow, robot.robot_id)][2]),
-            )
-            for robot in scenario.robots
-        ]
-        obstacles = [
-            replace(
-                obstacle,
-                position_mm=tuple(by_key[(obstacle.is_yellow, obstacle.obstacle_id)][:2]),
-            )
-            for obstacle in scenario.obstacles
-        ]
-        ball = (
-            None
-            if checkpoint.ball is None
-            else ScenarioBall(tuple(checkpoint.ball["position_mm"]))
-        )
-        return Scenario(
-            scenario.name,
-            robots=robots,
-            obstacles=obstacles,
-            ball=ball,
-            schema_version=scenario.schema_version,
-        )
 
-    def _finish_checkpoint_restore(self) -> None:
-        checkpoint = self._pending_checkpoint
-        execution_input = self.controller.execution_input
-        assert checkpoint is not None and execution_input is not None
-        owner = checkpoint.velocity_owner
-        self.controller.velocity_owner = None
-        self.controller.selections_locked = False
-        paths = self.controller.run(owner)
-        indexes = {_parse_robot_key(key): value for key, value in checkpoint.waypoint_indexes.items()}
-        self.runtime.start_execution(
-            paths, waypoint_indices=indexes, paused=True, scenario=execution_input.scenario
-        )
-        self.controller.pause()
-        self.canvas.paths = paths
-        self.canvas.waypoint_indices = indexes
-        self.current_metrics = deepcopy(self.metric_templates)
-        for metrics in self.current_metrics.values():
-            metrics.start_execution()
-        self.run_id = f"debug-{uuid4().hex[:8]}"
-        self.run_kind = "debug_replay"
-        self.parent_run_id = checkpoint.run_id
-        self.source_checkpoint_id = checkpoint.checkpoint_id
-        self.run_started_at = time.perf_counter()
-        self.recorded_boundaries.clear()
-        self.recorder = ExperimentRecorder(execution_input.scenario.name, owner)
-        self.recorder.record(
-            "checkpoint_restored",
-            run_id=self.run_id,
-            run_kind=self.run_kind,
-            parent_run_id=self.parent_run_id,
-            checkpoint_id=self.source_checkpoint_id,
-        )
-        self.checkpoint_store = CheckpointStore(self.recorder.path)
-        self._pending_checkpoint = None
-        self._refresh_ui()
 
     def emergency_stop(self, *, error: str | None = None, finalize: bool = True) -> None:
         self.execution_timer.stop()
@@ -1286,9 +1054,6 @@ class ExecutionConsolePage(QWidget):
                 else "",
                 "planner": owner,
                 "role": "EXECUTING",
-                "run_kind": self.run_kind,
-                "parent_run_id": self.parent_run_id or "",
-                "checkpoint_id": self.source_checkpoint_id or "",
                 "state": self.controller.state.value,
                 "timestamp": now,
             }
@@ -1471,7 +1236,6 @@ class ExecutionConsolePage(QWidget):
         self.pause_button.setEnabled(state is ExecutionState.RUNNING)
         is_paused = state is ExecutionState.PAUSED
         self.step_button.setEnabled(is_paused and not self._stepping)
-        self.previous_step_button.setEnabled(self.checkpoint_selector.currentIndex() > 0)
         selected_planner = self._selected_planner()
         debug_nodes, debug_edges = self.debug_geometry.get(selected_planner, ((), ()))
         self.canvas.debug_nodes = debug_nodes
@@ -1490,16 +1254,6 @@ class ExecutionConsolePage(QWidget):
                 and bool(selected_paths)
             )
             or (is_paused and not self._stepping)
-        )
-        self.resume_checkpoint_button.setEnabled(
-            bool(self.checkpoints)
-            and state
-            in (
-                ExecutionState.PAUSED,
-                ExecutionState.COMPLETED,
-                ExecutionState.STOPPED,
-                ExecutionState.ERROR,
-            )
         )
         self.reset_button.setEnabled(
             state
@@ -1642,7 +1396,3 @@ class ExecutionConsolePage(QWidget):
             self.emergency_stop(error="Application shutdown")
 
 
-def _parse_robot_key(value: str) -> tuple[bool, int]:
-    if len(value) < 2 or value[0] not in "YB":
-        raise ValueError(f"Invalid robot key: {value}")
-    return value[0] == "Y", int(value[1:])

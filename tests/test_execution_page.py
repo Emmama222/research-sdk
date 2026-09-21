@@ -7,10 +7,9 @@ from PySide6.QtWidgets import QApplication
 
 import research_sdk.ui.execution.page as page_module
 from research_sdk.planners import PlannerOutput
-from research_sdk.ui.execution.checkpoints import CheckpointStore
 from research_sdk.ui.execution.controller import ExecutionInput, ExecutionState
 from research_sdk.ui.execution.page import ExecutionConsolePage, ExecutionFieldCanvas
-from research_sdk.ui.runtime import LiveRobot, PlannedRobotPath, ResearchRuntime
+from research_sdk.ui.runtime import PlannedRobotPath, ResearchRuntime
 from research_sdk.ui.scenarios import Scenario, ScenarioObstacle, ScenarioRobot, ScenarioStore
 from research_sdk.world.snapshot import RobotSnapshot, WorldSnapshot, empty_robot_team
 from research_sdk.world.scene import PlanningObstacle, PlanningScene
@@ -176,14 +175,6 @@ def test_reset_control_is_labeled_reset(monkeypatch, tmp_path) -> None:
     page.shutdown()
 
 
-def test_checkpoint_selector_is_labeled_for_restart_action(monkeypatch, tmp_path) -> None:
-    page = _page(monkeypatch, tmp_path)
-
-    assert page.checkpoint_label.text() == "Last checkpoint"
-    assert page.resume_checkpoint_button.text() == "Restart checkpoint"
-    page.shutdown()
-
-
 def test_reset_stays_disabled_until_scenario_is_confirmed_in_grsim(
     monkeypatch, tmp_path
 ) -> None:
@@ -345,42 +336,6 @@ def test_unload_scenario_clears_execution_page_and_visual_model(
     assert page.canvas.paths == ()
     assert not page.unload_button.isEnabled()
     assert not page.reset_button.isEnabled()
-    page.shutdown()
-
-
-def _run_checkpointable(page: ExecutionConsolePage, path: PlannedRobotPath) -> None:
-    page.controller.load(
-        ExecutionInput.create(
-            _scenario(),
-            {"Planner A": (path,), "Planner B": (path,)},
-            {"Planner A": PlannerA, "Planner B": PlannerB},
-        )
-    )
-    page.canvas.set_scenario(_scenario())
-    page.controller.begin_apply()
-    page.controller.confirm_apply()
-    page.controller.run("Planner A")
-    page.run_id = "run-test"
-    page.checkpoint_store = CheckpointStore(page.store.folder / "checkpoints.jsonl")
-    page.runtime.start_execution((path,))
-
-
-def test_reaching_the_final_waypoint_does_not_create_a_checkpoint(
-    monkeypatch, tmp_path
-) -> None:
-    page = _page(monkeypatch, tmp_path)
-    path = PlannedRobotPath(1, True, ((0.0, 0.0), (500.0, 0.0), (1000.0, 0.0)))
-    _run_checkpointable(page, path)
-
-    page.runtime.world_pipeline.store.publish(_snapshot(500.0))
-    page.runtime.execute_tick({(True, 1): LiveRobot(1, True, (500.0, 0.0), 0.0)})
-    page._record_transitions(page.runtime.last_waypoint_transitions)
-    assert len(page.checkpoints) == 1
-
-    page.runtime.world_pipeline.store.publish(_snapshot(1000.0))
-    page.runtime.execute_tick({(True, 1): LiveRobot(1, True, (1000.0, 0.0), 0.0)})
-    page._record_transitions(page.runtime.last_waypoint_transitions)
-    assert len(page.checkpoints) == 1
     page.shutdown()
 
 

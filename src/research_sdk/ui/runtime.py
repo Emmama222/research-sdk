@@ -602,18 +602,6 @@ class ResearchRuntime:
         self._paused = False
         self.step_completed = False
 
-    def restore_waypoint_indices(
-        self, waypoint_indices: dict[tuple[bool, int], int]
-    ) -> None:
-        if not self._active_paths:
-            raise RuntimeError("No active paths are available")
-        for key, index in waypoint_indices.items():
-            if key not in self._active_paths:
-                raise ValueError(f"Checkpoint contains unknown active robot {key}")
-            self._waypoint_indices[key] = max(
-                0, min(int(index), len(self._active_paths[key].points_mm))
-            )
-
     def _tick_patrols(self, live_robots: dict[tuple[bool, int], LiveRobot]) -> None:
         """Drive each patrolling obstacle back and forth along its waypoints.
 

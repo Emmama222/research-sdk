@@ -56,7 +56,6 @@ class ExecutionController:
         self.velocity_owner: str | None = None
         self.selections_locked = False
         self.error_message = ""
-        self.pending_checkpoint_id: str | None = None
 
     def load(self, execution_input: ExecutionInput) -> None:
         self._require_not_running("load a scenario")
@@ -64,7 +63,6 @@ class ExecutionController:
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
-        self.pending_checkpoint_id = None
         self.state = ExecutionState.SCENARIO_LOADED
 
     def unload(self) -> None:
@@ -73,7 +71,6 @@ class ExecutionController:
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
-        self.pending_checkpoint_id = None
         self.state = ExecutionState.NO_SCENARIO
 
     def begin_apply(self) -> None:
@@ -142,17 +139,6 @@ class ExecutionController:
         self.velocity_owner = None
         self.selections_locked = False
         self.error_message = ""
-
-    def request_checkpoint_resume(self, checkpoint_id: str) -> None:
-        if self.state not in (
-            ExecutionState.PAUSED,
-            ExecutionState.COMPLETED,
-            ExecutionState.STOPPED,
-            ExecutionState.ERROR,
-        ):
-            raise RuntimeError(f"Cannot restore a checkpoint from {self.state.value}")
-        self.pending_checkpoint_id = checkpoint_id
-        self.state = ExecutionState.RESETTING
 
     @property
     def planner_names(self) -> tuple[str, ...]:

@@ -39,7 +39,7 @@ def test_scenario_replacement_packet_contains_all_robots() -> None:
 def test_scenario_replacement_orientation_is_sent_in_degrees() -> None:
     # grSim's replacement "dir" field is degrees, unlike every other orientation
     # value in the protocol (radians). Callers pass orientation_rad; the factory
-    # must convert, or a live checkpoint restore silently rotates robots wrong.
+    # must convert, or a scenario re-apply silently rotates robots wrong.
     packet = grSimPacketFactory.scenario_replacement_command(
         ({"x": 0.0, "y": 0.0, "orientation": pi / 2, "robot_id": 1, "isYellow": True},)
     )

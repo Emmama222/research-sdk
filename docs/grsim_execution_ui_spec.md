@@ -3,8 +3,8 @@
 Status: initial implementation complete; live grSim acceptance testing pending
 
 Implementation note (2026-08-25): the main Execution tab, state/ownership
-controller, vision-backed Apply gate, pause/continue/step controls, replay and
-checkpoint persistence, emergency-stop path, live field indicators, result
+controller, vision-backed Apply gate, pause/continue/step controls, replay,
+emergency-stop path, live field indicators, result
 tables/exports, connection tests, and automated tests are now present. The
 remaining acceptance step is an opt-in run against a real grSim instance; it
 is intentionally not part of the no-network unit-test suite.
@@ -15,7 +15,7 @@ Source: annotated grSim main-page sketch and follow-up decisions, 2026-08-24
 
 This document specifies the main page that loads a planned scenario, applies
 it to grSim, runs exactly one planner as the velocity owner, observes other
-planners in shadow mode, records checkpoints and measurements, and stops
+planners in shadow mode, records measurements, and stops
 safely. Scenario creation and preview remain in the Scenario Planner tab.
 
 ## Core safety rule
@@ -98,7 +98,6 @@ COMPLETED / STOPPED / ERROR
 | Continue | `PAUSED` | Resume from current robot positions and current waypoint progress. |
 | Step | `PAUSED` | Move toward each robot's next waypoint, stop when that step completes, then return to `PAUSED`. |
 | Replay from start | `COMPLETED`, `STOPPED`, `ERROR` | Restore scenario start, create a new run ID, reset current metrics, and run the same planner configuration. |
-| Resume checkpoint | `PAUSED`, `COMPLETED`, `STOPPED`, `ERROR` | Restore a recorded debug checkpoint and continue as a separately identified debug run. |
 | Reset E-Stop | All states except `NO_SCENARIO` | Send zero commands first, restore the last loaded scenario, wait for vision confirmation, clear the stopped/error latch, and unlock planner selection. |
 | Emergency Stop | Always | Best-effort zero velocity for every active robot and enter `STOPPED` or `ERROR`. |
 
@@ -168,83 +167,14 @@ robot stopped.
 - Continue computes commands from the robot's current observed position toward
   its retained next waypoint; it does not teleport or restart the segment.
 - Step is available only while paused. It advances each active robot to its
-  next waypoint, sends zero velocity when the step boundary is reached, records
-  a checkpoint, and returns to Paused.
+  next waypoint, sends zero velocity when the step boundary is reached, and
+  returns to Paused.
 
-## Replay and checkpoints
+## Replay
 
-Two operations are kept because they serve different purposes:
-
-- **Replay from start** is the reproducible experiment operation.
-- **Resume checkpoint** is the debugging operation represented by the sketch's
-  replay/respawn-to-last-waypoint idea.
-
-A checkpoint is appended to `events.jsonl` whenever an active robot reaches a
-waypoint. It contains a complete restoration boundary, not only that robot:
-
-- run ID and checkpoint ID;
-- monotonic and UTC timestamps;
-- triggering robot/team and waypoint index;
-- full observed robot poses for both teams;
-- ball position when available;
-- active planner and shadow planners;
-- every active robot's current waypoint index;
-- scenario name/version or content hash;
-- current path identifiers;
-- execution state; and
-- current metric snapshot.
-
-Resume checkpoint first sends zero velocity, applies the full saved world
-state, waits for the same vision confirmation used by scenario application,
-restores waypoint indexes, and enters Paused. Continuing creates a new run ID
-marked `debug_replay` with `parent_run_id` and `checkpoint_id`; it must not
-silently append measurements to the original experimental run.
-
-### Exact checkpoint creation algorithm
-
-The execution controller owns an in-memory set of recorded boundaries keyed by
-`(robot_team, robot_id, waypoint_index)`. On every control tick:
-
-1. compare each robot's observed position with its current waypoint threshold;
-2. when a waypoint changes from not reached to reached, advance its index once;
-3. ignore the event if that exact boundary was already recorded;
-4. freeze the latest complete `WorldSnapshot` rather than assembling robot
-   state from separate packets;
-5. copy all active waypoint indexes, planner ownership, paths, and metrics;
-6. append one `checkpoint_created` event and flush `events.jsonl`; and
-7. add the checkpoint to the Resume Checkpoint selector immediately.
-
-If two robots reach waypoints in the same control tick, record one checkpoint
-with both robot transitions in `triggers`. A checkpoint is not recorded from a
-partial or stale snapshot.
-
-Example event:
-
-```json
-{
-  "timestamp_utc": "2026-08-24T10:15:30.123456+00:00",
-  "event": "checkpoint_created",
-  "run_id": "run-20260824-0012",
-  "checkpoint_id": "cp-0004",
-  "scenario": {"name": "test_course", "schema_version": 3, "content_hash": "..."},
-  "triggers": [{"is_yellow": true, "robot_id": 0, "reached_waypoint_index": 2}],
-  "robots": [
-    {"is_yellow": true, "robot_id": 0, "pose": [1200.0, 300.0, 0.2]},
-    {"is_yellow": false, "robot_id": 2, "pose": [-500.0, 900.0, -0.4]}
-  ],
-  "ball": {"position_mm": [0.0, 0.0]},
-  "waypoint_indexes": {"Y0": 3},
-  "velocity_owner": "PRMPlanner",
-  "shadow_planners": ["VisibilityGraphPlanner"],
-  "path_ids": {"Y0": "path-Y0-4f8b"},
-  "metrics": {"elapsed_ms": 1534.2, "collisions": 0, "plans_made": 3},
-  "state": "RUNNING"
-}
-```
-
-Checkpoint payloads must contain only JSON-compatible values. The recorder
-maintains the append-only event file; a checkpoint index reads these events for
-the current run folder rather than creating a second checkpoint file.
+**Replay from start** is the reproducible experiment operation: it restores the
+scenario start, creates a new run ID, resets current metrics, and re-runs the
+same planner configuration.
 
 ### Exact Replay from Start algorithm
 
@@ -260,29 +190,8 @@ the current run folder rather than creating a second checkpoint file.
 9. Start the new run automatically after confirmation; if confirmation fails,
    enter `ERROR` and keep all robots stopped.
 
-Replay from Start never restores a checkpoint and never inherits elapsed time,
-arrival time, collisions, or plan counts from its parent run.
-
-### Exact Resume Checkpoint algorithm
-
-1. The operator chooses a checkpoint ID from the debug checkpoint selector.
-2. Require `PAUSED`, `COMPLETED`, `STOPPED`, or `ERROR`.
-3. Call Emergency Stop and keep the page non-runnable during restoration.
-4. Validate that the checkpoint scenario hash and planner/path IDs match the
-   currently loaded execution input. Reject mismatches rather than guessing.
-5. Create a new run ID with `run_kind=debug_replay`, `parent_run_id`, and
-   `checkpoint_id`.
-6. Send a replacement packet containing every checkpoint robot pose and ball
-   position, not only the robot that triggered the checkpoint.
-7. Wait for stable vision confirmation against the checkpoint poses.
-8. Restore each active robot's next waypoint index and the same velocity owner
-   and shadow selections.
-9. Enter `PAUSED`; do not send motion automatically.
-10. Continue or Step starts new measurements from zero while retaining the
-    parent/checkpoint linkage in every result row.
-
-If any restore, confirmation, or path validation step fails, enter `ERROR`,
-append `checkpoint_restore_failed`, and leave all robots stopped.
+Replay from Start never inherits elapsed time, arrival time, collisions, or
+plan counts from its parent run.
 
 ## Emergency and fatal-error handling
 
@@ -349,8 +258,7 @@ run is active and retain finalized rows. Each row includes:
 - the corresponding measured Result A or Result B fields.
 
 The executing row is green and shadow rows are yellow. Missing measurements
-remain blank, not zero. Debug checkpoint replays are visibly labeled and are
-not mixed into normal comparison aggregates unless explicitly requested.
+remain blank, not zero.
 
 Export Result A and Export Result B write the complete visible table to CSV,
 not only the last selected row.
@@ -370,10 +278,8 @@ not only the last selected row.
 ### Top-centre: state and transport
 
 - Large state badge showing the exact controller state.
-- Pause, Continue, Step, Replay from Start, Resume Checkpoint, Reset E-Stop, and large
+- Pause, Continue, Step, Replay from Start, Reset E-Stop, and large
   Emergency Stop buttons.
-- Checkpoint selector showing checkpoint ID, elapsed time, triggering robot,
-  and waypoint.
 - Fatal/error summary label that remains visible until Reset E-Stop.
 
 ### Top-right: scenario application
@@ -437,8 +343,6 @@ Keep state and safety behavior out of widget handlers:
 | `ExecutionController` | Valid transitions, ownership, pause/step/replay/reset orchestration. |
 | `ScenarioApplyVerifier` | Stable multi-snapshot position/orientation confirmation. |
 | `PlannerExecutionSet` | One velocity owner plus zero or more commandless shadow planners. |
-| `CheckpointRecord` | JSON-compatible complete restoration payload. |
-| `CheckpointStore` | Append/index checkpoint events in the run's `events.jsonl`. |
 | `EmergencyStopper` | Idempotent best-effort zero commands and failure reporting. |
 | `ExecutionResultsModel` | Current and finalized Result A/B table rows. |
 | `ExecutionConsolePage` | Qt presentation and signal wiring only. |
@@ -449,7 +353,6 @@ Suggested module split:
 src/research_sdk/ui/execution/
   controller.py
   apply_verifier.py
-  checkpoints.py
   results_model.py
   page.py
 ```
@@ -465,7 +368,7 @@ ownership, pause/step, and stop operations but does not own Qt widgets.
 4. Add runtime-level single-planner velocity ownership and shadow planners.
 5. Implement idempotent emergency stop and fatal-error hooks.
 6. Implement pause, continue, and single-waypoint step semantics.
-7. Add waypoint checkpoint events, start replay, and debug checkpoint resume.
+7. Add start replay.
 8. Build the new main-page layout and planner/state styling.
 9. Add live field progress, stale robot, and collision markers.
 10. Add live Result A/B models and full-table CSV exports.
@@ -517,19 +420,9 @@ or Qt operations.
 Use fake planners and a recording fake sender. Assert exact robot/team keys and
 command counts.
 
-### `tests/test_execution_checkpoints.py`
+### `tests/test_execution_replay.py`
 
-- `test_checkpoint_is_created_once_per_reached_boundary`.
-- `test_two_reaches_in_one_tick_create_one_checkpoint_with_two_triggers`.
-- `test_checkpoint_requires_complete_fresh_snapshot`.
-- `test_checkpoint_json_round_trip_preserves_full_world_and_indexes`.
-- `test_events_jsonl_is_flushed_after_checkpoint`.
 - `test_replay_from_start_resets_metrics_and_indexes`.
-- `test_resume_checkpoint_rejects_scenario_or_path_hash_mismatch`.
-- `test_resume_checkpoint_applies_full_world_before_restoring_indexes`.
-- `test_resume_checkpoint_enters_paused_without_sending_motion`.
-- `test_debug_continue_creates_linked_run_with_metrics_starting_at_zero`.
-- `test_restore_failure_records_event_and_emergency_stops`.
 
 ### `tests/test_emergency_stop.py`
 
@@ -555,7 +448,6 @@ feedback.
 
 - `test_rows_include_run_scenario_planner_role_state_and_timestamps`.
 - `test_shadow_and_executing_metrics_remain_separate`.
-- `test_debug_replay_rows_keep_parent_and_checkpoint_ids`.
 - `test_missing_values_serialize_as_blank`.
 - `test_result_a_and_b_exports_include_every_visible_row`.
 - `test_completed_rows_are_not_overwritten_by_new_run`.
@@ -582,7 +474,6 @@ Mark these tests `integration` and skip unless grSim is explicitly enabled:
 - run the motion feedback test and confirm the final stop;
 - execute one short path with one velocity owner;
 - pause, continue, and single-step against live feedback;
-- restore a checkpoint and verify all robot poses; and
 - force a vision timeout and confirm stop commands were attempted.
 
 Integration tests must use dedicated robot IDs and show a confirmation prompt
@@ -598,9 +489,8 @@ behavior pass. No real command is sent.
 
 ### Phase 2: execution mechanics
 
-Deliver Apply, Run, Pause, Continue, Step, checkpoint recording, and both
-replay modes. Exit gate: controller/checkpoint tests pass with deterministic
-fake snapshots and commands.
+Deliver Apply, Run, Pause, Continue, Step, and replay from start. Exit gate:
+controller tests pass with deterministic fake snapshots and commands.
 
 ### Phase 3: UI and results
 
@@ -610,13 +500,11 @@ exports. Exit gate: offscreen Qt tests and full existing suite pass.
 ### Phase 4: controlled grSim validation
 
 Enable integration tests one feature at a time: route, Apply confirmation,
-motion test, path execution, pause/step, checkpoint restore, then induced
-failure. Exit gate: every operation ends with verified zero velocity.
+motion test, path execution, pause/step, then induced failure. Exit gate: every operation ends with verified zero velocity.
 
 ## Out of scope for v1
 
 - simultaneous velocity ownership by multiple planners;
 - editing scenario geometry on the execution page;
 - silently continuing after stale vision or fatal control errors;
-- merging debug checkpoint metrics into reproducible experiment runs; and
 - replacing the established `WorldSnapshot`/pipeline boundary.
