@@ -60,7 +60,7 @@ GROUPS = {
     ],
     "replan": [
         "replan_count", "replan_failures", "replan_attempts",
-        "blocked_ms", "blocked_time_pct", "any_replan_failure",
+        "blocked_robot_ms", "blocked_time_pct", "any_replan_failure",
         "rebuild_calls", "check_calls",
         "planner_calls", "planning_time_ms_total", "planning_time_ms_initial",
         "planning_time_ms_max_call", "planning_time_ms_p95_call",
@@ -159,9 +159,15 @@ def load(folder: Path) -> pd.DataFrame:
     # therefore NOT comparable across periods or policies. Multiplying by the
     # period converts it to the time the robot spent with no valid route, which
     # is period-independent and physically meaningful.
-    runs["blocked_ms"] = runs["replan_failures"] * runs["replan_period_ms"]
+    # NOTE: _plan_call runs once PER ROBOT per opportunity, and both counters are
+    # summed across the team. replan_failures is therefore robot-periods, not
+    # run-periods, so the robot count must divide out or the share is inflated by
+    # the team size (6x in 6v6).
+    runs["blocked_robot_ms"] = runs["replan_failures"] * runs["replan_period_ms"]
+    _robots = runs["robot_count"] if "robot_count" in runs else 1
     runs["blocked_time_pct"] = (
-        100 * runs["blocked_ms"] / runs["simulated_duration_ms"].replace(0, np.nan)
+        100 * runs["blocked_robot_ms"]
+        / (runs["simulated_duration_ms"] * _robots).replace(0, np.nan)
     )
     return runs
 
@@ -255,7 +261,7 @@ def blocked_time(runs: pd.DataFrame, out_dir: Path) -> None:
     t = (d.groupby(["planner", "replan_policy", "replan_period_ms"])
            .agg(n=("blocked_time_pct", "size"),
                 failures_median=("replan_failures", "median"),
-                blocked_ms_median=("blocked_ms", "median"),
+                blocked_robot_ms_median=("blocked_robot_ms", "median"),
                 blocked_pct_median=("blocked_time_pct", "median"),
                 blocked_pct_mean=("blocked_time_pct", "mean"))
            .reset_index())
@@ -282,7 +288,7 @@ def blocked_time(runs: pd.DataFrame, out_dir: Path) -> None:
     ax.set_yticks(range(len(planners)), [PLANNER_LABEL[p] for p in planners])
     ax.invert_yaxis()
     ax.set_xlim(left=-0.6)
-    ax.set_xlabel("Share of each run with no valid route (%) — lower is better",
+    ax.set_xlabel("Share of robot-time with no valid route (%) — lower is better",
                   fontsize=10, color=MUTED)
     ax.set_title("Time spent executing a route already known to be blocked",
                  fontsize=12, color=INK, loc="left", pad=34)
