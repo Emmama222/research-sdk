@@ -1,0 +1,246 @@
+{
+  "batch": "acra-6v6-matched",
+  "runs": 7800,
+  "scenarios": 200,
+  "attribution": "DEC-008 robot-initiated",
+  "frame_budget_ms": 16.67,
+  "safety_by_policy_pct": {
+    "voronoi": {
+      "cycle": 88.3,
+      "event": 88.8,
+      "once": 30.5
+    },
+    "prm": {
+      "cycle": 81.0,
+      "event": 80.8,
+      "once": 27.5
+    },
+    "visibility": {
+      "cycle": 73.2,
+      "event": 71.8,
+      "once": 33.0
+    }
+  },
+  "safety_by_horizon_pct_cycle_pooled": {
+    "voronoi": {
+      "0": 77.0,
+      "50": 94.8,
+      "150": 93.2
+    },
+    "prm": {
+      "0": 75.8,
+      "50": 85.8,
+      "150": 81.5
+    },
+    "visibility": {
+      "0": 73.5,
+      "50": 74.5,
+      "150": 71.8
+    }
+  },
+  "safety_by_horizon_pct_event_pooled": {
+    "voronoi": {
+      "0": 74.8,
+      "50": 96.2,
+      "150": 95.5
+    },
+    "prm": {
+      "0": 75.8,
+      "50": 85.8,
+      "150": 80.8
+    },
+    "visibility": {
+      "0": 71.8,
+      "50": 75.5,
+      "150": 68.2
+    }
+  },
+  "safety_by_horizon_pct_cycle_20ms": {
+    "voronoi": {
+      "0": 87.0,
+      "50": 98.0,
+      "150": 98.5
+    },
+    "prm": {
+      "0": 86.0,
+      "50": 91.0,
+      "150": 83.5
+    },
+    "visibility": {
+      "0": 80.0,
+      "50": 78.5,
+      "150": 76.0
+    }
+  },
+  "safety_by_horizon_pct_event_20ms": {
+    "voronoi": {
+      "0": 86.0,
+      "50": 98.5,
+      "150": 100.0
+    },
+    "prm": {
+      "0": 86.5,
+      "50": 91.0,
+      "150": 83.5
+    },
+    "visibility": {
+      "0": 78.5,
+      "50": 80.5,
+      "150": 74.5
+    }
+  },
+  "safety_by_horizon_pct_cycle_100ms": {
+    "voronoi": {
+      "0": 67.0,
+      "50": 91.5,
+      "150": 88.0
+    },
+    "prm": {
+      "0": 65.5,
+      "50": 80.5,
+      "150": 79.5
+    },
+    "visibility": {
+      "0": 67.0,
+      "50": 70.5,
+      "150": 67.5
+    }
+  },
+  "failed_rebuilds_by_horizon_cycle_pooled": {
+    "voronoi": {
+      "0": 1.1,
+      "50": 1.6,
+      "150": 3.5
+    },
+    "prm": {
+      "0": 10.0,
+      "50": 18.6,
+      "150": 53.1
+    },
+    "visibility": {
+      "0": 13.8,
+      "50": 22.6,
+      "150": 58.0
+    }
+  },
+  "failed_rebuilds_by_horizon_cycle_20ms": {
+    "voronoi": {
+      "0": 1.8,
+      "50": 2.6,
+      "150": 6.0
+    },
+    "prm": {
+      "0": 16.1,
+      "50": 30.9,
+      "150": 89.5
+    },
+    "visibility": {
+      "0": 22.8,
+      "50": 37.4,
+      "150": 97.6
+    }
+  },
+  "compute_cycle_over_event": {
+    "voronoi": {
+      "cycle_ms": 159.3,
+      "event_ms": 47.2,
+      "ratio": 3.38
+    },
+    "prm": {
+      "cycle_ms": 205.2,
+      "event_ms": 43.8,
+      "ratio": 4.69
+    },
+    "visibility": {
+      "cycle_ms": 386.6,
+      "event_ms": 110.6,
+      "ratio": 3.5
+    }
+  },
+  "budget_overrun_pct": {
+    "voronoi": {
+      "cycle": 0.7,
+      "event": 0.2
+    },
+    "prm": {
+      "cycle": 7.6,
+      "event": 3.2
+    },
+    "visibility": {
+      "cycle": 10.9,
+      "event": 4.0
+    }
+  },
+  "time_to_goal_event_minus_cycle": {
+    "voronoi@20ms": {
+      "n_paired_completed": 196,
+      "median_delta_s": 0.12,
+      "mean_delta_s": 0.34,
+      "wilcoxon_p": 3.0470072717720682e-12
+    },
+    "voronoi@100ms": {
+      "n_paired_completed": 196,
+      "median_delta_s": 0.12,
+      "mean_delta_s": 0.389,
+      "wilcoxon_p": 4.515049461573758e-14
+    },
+    "prm@20ms": {
+      "n_paired_completed": 172,
+      "median_delta_s": 0.1,
+      "mean_delta_s": 0.357,
+      "wilcoxon_p": 2.235935854046262e-12
+    },
+    "prm@100ms": {
+      "n_paired_completed": 172,
+      "median_delta_s": 0.0,
+      "mean_delta_s": 0.29,
+      "wilcoxon_p": 4.390920733504141e-09
+    },
+    "visibility@20ms": {
+      "n_paired_completed": 172,
+      "median_delta_s": 0.01,
+      "mean_delta_s": 0.217,
+      "wilcoxon_p": 5.85567962322203e-10
+    },
+    "visibility@100ms": {
+      "n_paired_completed": 172,
+      "median_delta_s": 0.0,
+      "mean_delta_s": 0.127,
+      "wilcoxon_p": 7.295876217684038e-08
+    }
+  },
+  "initial_plan_failures": {
+    "voronoi": {
+      "scenarios": 200,
+      "failed": 4,
+      "pct": 2.0
+    },
+    "prm": {
+      "scenarios": 200,
+      "failed": 28,
+      "pct": 14.0
+    },
+    "visibility": {
+      "scenarios": 200,
+      "failed": 28,
+      "pct": 14.0
+    }
+  },
+  "replanning_gap_points": {
+    "voronoi": {
+      "once_pct": 30.5,
+      "cycle_minus_once": 57.8,
+      "event_minus_once": 58.3
+    },
+    "prm": {
+      "once_pct": 27.5,
+      "cycle_minus_once": 53.5,
+      "event_minus_once": 53.3
+    },
+    "visibility": {
+      "once_pct": 33.0,
+      "cycle_minus_once": 40.2,
+      "event_minus_once": 38.8
+    }
+  }
+}

@@ -2,10 +2,25 @@
 """Planner calls split into the ones that produced a route and the ones that did not.
 
 Every control tick the executor consults the planner once per active robot.
-``headless.py`` tags each call: ``rebuild`` when it returned a new route,
-otherwise ``check`` -- the call only confirmed the route already being
-followed. The two counts partition ``planner_calls`` exactly, so one stacked
-bar per arm shows how much of the planning budget bought a new route.
+``headless.py`` records only two buckets -- ``rebuild_calls`` and
+``check_calls`` -- but ``check_calls`` is not all cheap confirmations. Because
+``headless.py:805`` routes anything that is not "initial"/"rebuild" into the
+check bucket, it also absorbs FAILED rebuild attempts (the planner ran a full
+search and returned nothing) and direct-path switches. Both are counted
+separately in ``replan_failures`` and ``direct_path_switches``, so the honest
+three-way split is recoverable without a re-run:
+
+    failed  = replan_failures
+    switch  = direct_path_switches
+    check   = check_calls - failed - switch
+
+This matters because a failed rebuild costs what a rebuild costs, not what a
+check costs. Presenting it inside the "check" band understates how much of the
+budget bought nothing -- for PRM under event triggering, most rebuild attempts
+fail.
+
+NOTE: this splits CALL COUNTS only. Splitting planning TIME needs a
+``failed_ms`` bucket in ``headless.py`` and a re-run.
 
 Usage:
     python scripts/plot_plan_efficiency.py results/acra-6v6-canonical
@@ -36,8 +51,10 @@ INK, MUTED, GRID = "#1f2733", "#5b6472", "#e3e6ea"
 # OKLab lightness (0.905) so neither policy reads as heavier than the other.
 FILL = {
     ("cycle", "rebuild"): "#d55c25",
+    ("cycle", "failed"): "#f0a074",
     ("cycle", "check"): "#f9d9c2",
     ("event", "rebuild"): "#256abf",
+    ("event", "failed"): "#7fb0ee",
     ("event", "check"): "#cde2fb",
 }
 
@@ -62,11 +79,20 @@ def summarize(runs: pd.DataFrame) -> pd.DataFrame:
             calls=("planner_calls", "mean"),
             rebuilds=("rebuild_calls", "mean"),
             checks=("check_calls", "mean"),
-            replan_failures=("replan_failures", "mean"),
+            failed=("replan_failures", "mean"),
+            switches=("direct_path_switches", "mean"),
         )
         .reset_index()
     )
-    grouped["useful_pct"] = 100 * grouped.rebuilds / grouped.calls
+    # check_calls absorbs failures and direct switches (headless.py:805).
+    grouped["checks"] = grouped.checks - grouped.failed - grouped.switches
+    grouped["useful"] = grouped.rebuilds + grouped.switches
+    grouped["useful_pct"] = 100 * grouped.useful / grouped.calls
+    grouped["wasted_pct"] = 100 * grouped.failed / grouped.calls
+    # Share of full planning attempts (rebuild or failed) that returned nothing.
+    grouped["attempt_fail_pct"] = (
+        100 * grouped.failed / (grouped.failed + grouped.rebuilds).replace(0, float("nan"))
+    )
     return grouped
 
 
@@ -82,10 +108,14 @@ def _panel(ax, data: pd.DataFrame, period: float, show_ylabels: bool) -> None:
     for pos, (planner, policy, row) in zip(positions, rows):
         ax.barh(pos, row.rebuilds, height=0.62, color=FILL[(policy, "rebuild")],
                 edgecolor="white", linewidth=0.8, zorder=3)
-        ax.barh(pos, row.checks, left=row.rebuilds, height=0.62,
-                color=FILL[(policy, "check")], edgecolor="white", linewidth=0.8, zorder=3)
+        ax.barh(pos, row.failed, left=row.rebuilds, height=0.62,
+                color=FILL[(policy, "failed")], edgecolor="white", linewidth=0.8, zorder=3)
+        ax.barh(pos, row.checks + row.switches, left=row.rebuilds + row.failed,
+                height=0.62, color=FILL[(policy, "check")], edgecolor="white",
+                linewidth=0.8, zorder=3)
+        fail_txt = "" if row.failed < 0.05 else f"  ·  {row.attempt_fail_pct:.0f}% of attempts failed"
         ax.text(row.calls * 1.03, pos,
-                f"{row.rebuilds:,.0f}/{row.calls:,.0f}  {row.useful_pct:.1f}%",
+                f"{row.rebuilds:,.0f}/{row.calls:,.0f}  {row.useful_pct:.1f}%{fail_txt}",
                 va="center", ha="left", fontsize=7, color=MUTED, zorder=4)
 
     ax.set_yticks(positions)
@@ -110,7 +140,7 @@ def plot(summary: pd.DataFrame, out: Path) -> None:
     # One x-scale across panels. Independent scales would draw the 100 ms bars
     # the same length as the 20 ms ones, hiding that the longer period costs
     # roughly a fifth as many calls -- which is half of what this figure says.
-    fig, axes = plt.subplots(1, len(periods), figsize=(7.2, 2.9),
+    fig, axes = plt.subplots(1, len(periods), figsize=(8.6, 3.2),
                              facecolor="white", sharex=True)
     axes = [axes] if len(periods) == 1 else list(axes)
     for index, (ax, period) in enumerate(zip(axes, periods)):
@@ -121,14 +151,14 @@ def plot(summary: pd.DataFrame, out: Path) -> None:
         Patch(facecolor=FILL[(policy, kind)], edgecolor="white",
               label=f"{policy} · {kind}")
         for policy in POLICIES
-        for kind in ("rebuild", "check")
+        for kind in ("rebuild", "failed", "check")
     ]
-    fig.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.005, -0.08),
-               frameon=False, fontsize=8, ncol=4, labelcolor=MUTED,
+    fig.legend(handles=legend, loc="lower left", bbox_to_anchor=(0.005, -0.14),
+               frameon=False, fontsize=8, ncol=3, labelcolor=MUTED,
                columnspacing=1.4, handlelength=1.1)
     fig.suptitle("How much planning bought a new route", fontsize=11, color=INK,
                  x=0.005, ha="left", y=1.03)
-    fig.tight_layout(rect=(0, 0.08, 1, 1))
+    fig.tight_layout(rect=(0, 0.14, 1, 1))
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out.with_suffix(".png"), dpi=200, bbox_inches="tight", facecolor="white")
     fig.savefig(out.with_suffix(".pdf"), bbox_inches="tight", facecolor="white")
