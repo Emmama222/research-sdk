@@ -65,6 +65,7 @@ def evaluate_route(
     horizon_ms: int | float = 0.0,
     target_deadzone_mm: float = DEFAULT_TARGET_DEADZONE_MM,
     periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
+    check_full_route: bool = False,
 ) -> RerouteDecision:
     """Return whether ``state``'s cached route still clears ``scene``.
 
@@ -72,6 +73,11 @@ def evaluate_route(
     ``scene.is_path_free``, never a full graph rebuild. A caller reroutes
     (redoes the expensive part of its own ``plan()``) only when
     ``need_reroute`` comes back ``True``.
+
+    ``check_full_route`` also treats a blocked *later* segment of the cached
+    route as an event (by default only the segment to the active waypoint is
+    checked). This matters when predicted obstacles sweep across the part of
+    the route the robot has not reached yet.
     """
     ignore = ignore_robots or set()
     active_waypoint = state.waypoints[0] if state.waypoints else None
@@ -87,6 +93,16 @@ def evaluate_route(
     active_route_blocked = active_waypoint is not None and not scene.is_path_free(
         start, active_target, ignore_robots=ignore, clearance=clearance_mm, horizon_ms=horizon_ms
     )
+    if check_full_route and not active_route_blocked and state.waypoints:
+        route = [_pose_xy(point) for point in state.waypoints]
+        if _distance(route[-1], target) > 1e-6:
+            route.append(target)
+        active_route_blocked = any(
+            not scene.is_path_free(
+                first, second, ignore_robots=ignore, clearance=clearance_mm, horizon_ms=horizon_ms
+            )
+            for first, second in zip(route, route[1:])
+        )
     route_finished = not state.waypoints
     periodic_due = (
         periodic_reroute_frames is not None

@@ -1,5 +1,13 @@
 # Docs
 
+- [builtin-simulator.md](builtin-simulator.md) — lightweight grSim-compatible simulator the console can run itself
+- [physics.md](physics.md) — native grSim/ODE validation, setup, and recorded evidence
+
+[Graphify](../GRAPHIFY.md) provides visual maps of the system flow, package
+dependencies, planner family, and execution lifecycle.
+
+- [headless.md](headless.md) — faster-than-real-time scenario batches and result exports
+
 
 - [current.md](current.md) — living snapshot of the planners, runtime policy flags, and comparison tooling as they stand today
 - [architecture.md](architecture.md) — module map and how a request flows through the system

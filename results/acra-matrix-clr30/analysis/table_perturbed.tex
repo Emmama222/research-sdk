@@ -1,0 +1,21 @@
+\begin{table}[t]
+\centering
+\footnotesize
+\caption{Perturbed hand-made scenarios ($n=60$ scenarios, 3 robots, 60\,Hz control). Median planning time per run and median of the per-run largest single call.}
+\label{tab:perturbed}
+\begin{tabular}{llrrrrr}
+\hline
+Planner & Policy & Coll.-free (\%) & Replans & Plan.\ time (ms) & Max call (ms) & Goal (s) \\
+\hline
+Voronoi & Plan once & 65 & 0.0 & 14 & 4.7 & 5.30 \\
+Voronoi & Every cycle & 90 & 265.8 & 626 & 7.1 & 2.82 \\
+Voronoi & Event-triggered & 90 & 5.2 & 43 & 4.8 & 3.52 \\
+PRM & Plan once & 70 & 0.0 & 20 & 6.9 & 3.97 \\
+PRM & Every cycle & 100 & 119.0 & 799 & 10.9 & 2.68 \\
+PRM & Event-triggered & 96 & 3.0 & 48 & 7.1 & 3.09 \\
+Visibility graph & Plan once & 13 & 0.0 & 28 & 9.4 & 3.52 \\
+Visibility graph & Every cycle & 13 & 243.4 & 2098 & 13.6 & 3.62 \\
+Visibility graph & Event-triggered & 17 & 38.5 & 332 & 11.9 & 3.70 \\
+\hline
+\end{tabular}
+\end{table}

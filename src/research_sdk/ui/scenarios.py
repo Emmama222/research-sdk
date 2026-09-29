@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 Point = tuple[float, float]
+# Patrol speed used when a scenario obstacle does not set its own.
+DEFAULT_PATROL_SPEED_MMPS = 800.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +35,9 @@ class ScenarioObstacle:
     radius_mm: float
     velocity_mmps: Point = (0.0, 0.0)
     planner_keys: tuple[str, ...] = ()
+    patrol_waypoints: tuple[Point, ...] = ()
+    # Constant patrol speed; 0 means "use the consumer's default".
+    patrol_speed_mmps: float = 0.0
 
     def applies_to(self, planner_key: str | None) -> bool:
         """Return whether this obstacle belongs to the selected algorithm.
@@ -136,6 +141,10 @@ class Scenario:
                     radius_mm=float(obstacle["radius_mm"]),
                     velocity_mmps=tuple(obstacle.get("velocity_mmps", (0.0, 0.0))),
                     planner_keys=tuple(str(key) for key in obstacle.get("planner_keys", ())),
+                    patrol_waypoints=tuple(
+                        tuple(point) for point in obstacle.get("patrol_waypoints", ())
+                    ),
+                    patrol_speed_mmps=float(obstacle.get("patrol_speed_mmps", 0.0)),
                 )
                 for obstacle in payload.get("obstacles", ())
             ],

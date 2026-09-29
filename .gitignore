@@ -1,6 +1,6 @@
 # research-sdk generated output
 quickstart_output.json
-results/
+# results/
 
 
 # Byte-compiled / optimized / DLL files
@@ -221,3 +221,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local simulation engines and generated research artifacts.
+.local/
+
+# Transfer artefacts, never research output: repo bundles and source tarballs
+results/_transfer/
+results/*.tgz
+results/*.tar.gz
+*.bundle
+

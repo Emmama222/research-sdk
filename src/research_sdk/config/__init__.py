@@ -23,6 +23,10 @@ _FIELD_KEYS = {
 }
 
 _PLANNER_KEYS = {
+    "planning_clearance_mm",
+    "voronoi_clearance_mm",
+    "prm_clearance_mm",
+    "visibility_clearance_mm",
     "voronoi_boundary_inset_mm",
     "voronoi_density_percent",
     "voronoi_max_density_nodes",
@@ -109,7 +113,21 @@ if not isinstance(SSL_FIELD_CONFIG["team_is_positive"], bool):
     raise ValueError("team_is_positive must be a boolean")
 if not isinstance(SSL_FIELD_CONFIG["safe_margin_mm"], (int, float)):
     raise ValueError("safe_margin_mm must be numeric")
-for _planner_key in _PLANNER_KEYS - {"voronoi_obstacle_cost_weight"}:
+_CLEARANCE_KEYS = (
+    "planning_clearance_mm",
+    "voronoi_clearance_mm",
+    "prm_clearance_mm",
+    "visibility_clearance_mm",
+)
+for _clearance_key in _CLEARANCE_KEYS:
+    _value = PLANNER_VARIABLES[_clearance_key]
+    if _value is None:
+        if _clearance_key == "planning_clearance_mm":
+            raise ValueError("planning_clearance_mm must be a number")
+        continue
+    if isinstance(_value, bool) or not isinstance(_value, (int, float)) or _value < 0:
+        raise ValueError(f"{_clearance_key} must be a non-negative number")
+for _planner_key in _PLANNER_KEYS - {"voronoi_obstacle_cost_weight", *_CLEARANCE_KEYS}:
     _positive_number(PLANNER_VARIABLES, _planner_key)
 if not isinstance(PLANNER_VARIABLES["voronoi_obstacle_cost_weight"], (int, float)):
     raise ValueError("voronoi_obstacle_cost_weight must be numeric")
@@ -185,6 +203,29 @@ for _key, _value in PLANNER_VARIABLES.items():
 
 # Clearance is a physical constraint, not an independently tuned planner value.
 VORONOI_MIN_CLEARANCE_MM = ROBOT_RADIUS_MM + SAFE_MARGIN
+
+PLANNING_CLEARANCE_MM = float(PLANNER_VARIABLES["planning_clearance_mm"])
+_CLEARANCE_BY_PLANNER = {
+    "voronoi": PLANNER_VARIABLES["voronoi_clearance_mm"],
+    "prm": PLANNER_VARIABLES["prm_clearance_mm"],
+    "visibility": PLANNER_VARIABLES["visibility_clearance_mm"],
+}
+
+
+def planning_clearance_mm(planner_name: str | None = None) -> float:
+    """Clearance for ``planner_name``, falling back to the shared value.
+
+    ``planner_name`` is matched loosely, so "prm", "PRMPlanner" and
+    "research_sdk.planners.PRM.prm_dijkstra.PRMPlanner" all select the PRM entry.
+    """
+    override = None
+    if planner_name:
+        name = str(planner_name).lower()
+        for key, value in _CLEARANCE_BY_PLANNER.items():
+            if key in name:
+                override = value
+                break
+    return float(PLANNING_CLEARANCE_MM if override is None else override)
 
 # Network endpoints.
 MULTICAST_INTERFACE_IP = str(NETWORK_INPUT_CONFIG["multicast_interface_ip"])

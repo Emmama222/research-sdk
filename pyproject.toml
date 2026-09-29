@@ -12,17 +12,19 @@ dependencies = [
     "protobuf>=5.0",
     "PyYAML>=6.0",
     "numpy>=1.26",
-    "networkx>=3.2",
     "networkx>=3.6",
 ]
 
 [project.optional-dependencies]
+analysis = ["pandas>=2.0", "scipy>=1.11", "matplotlib>=3.8"]
 parquet = ["pyarrow>=16.0"]
 # matplotlib: side-by-side comparison plot in scripts/demo_planners.py.
 demo = ["matplotlib>=3.8"]
 dev = ["pytest>=8.0", "ruff>=0.6", "grpcio-tools>=1.60"]
 
 [project.scripts]
+research-sdk-headless = 'research_sdk.headless:main'
+research-sdk-sim = 'research_sdk.sim.__main__:main'
 research-sdk-ui = "research_sdk.ui.app:main"
 
 [build-system]
