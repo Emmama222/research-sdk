@@ -146,6 +146,11 @@ def test_batch_summary_and_exports_are_research_ready(tmp_path) -> None:
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     assert manifest["physics_equivalence"] is False
     assert manifest["run_count"] == 2
+    # The key must always be present so a batch can be matched to the code that
+    # wrote it; the value is None where git is unavailable, never absent.
+    assert "code_revision" in manifest
+    assert "code_dirty" in manifest
+    assert manifest["code_revision"] is None or len(manifest["code_revision"]) == 40
 
 
 def test_cli_accepts_a_scenario_file_and_writes_results(tmp_path) -> None:

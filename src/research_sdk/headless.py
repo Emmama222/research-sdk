@@ -114,9 +114,7 @@ class SimulationConfig:
             raise ValueError("planning_clearance_mm must be finite and non-negative")
         if self.periodic_reroute_frames is not None and self.periodic_reroute_frames < 1:
             raise ValueError("periodic_reroute_frames must be at least 1 or None")
-        if self.time_scale is not None and (
-            not isfinite(self.time_scale) or self.time_scale <= 0
-        ):
+        if self.time_scale is not None and (not isfinite(self.time_scale) or self.time_scale <= 0):
             raise ValueError("time_scale must be finite and positive, or None for unpaced")
 
 
@@ -421,14 +419,10 @@ def _plan_call(
 
     if first:
         success = output is not None and (
-            output.is_path_free
-            or bool(waypoints)
-            or _distance(robot.start_mm, target) <= 1e-9
+            output.is_path_free or bool(waypoints) or _distance(robot.start_mm, target) <= 1e-9
         )
         state.path = (
-            _dedupe_path((robot.start_mm, *waypoints, target))
-            if success
-            else (robot.start_mm,)
+            _dedupe_path((robot.start_mm, *waypoints, target)) if success else (robot.start_mm,)
         )
         state.failed = not success
         state.initial_path = state.path
@@ -496,8 +490,12 @@ def _replan_reason(state: _RobotState, scene: PlanningScene, config: SimulationC
     return "other"
 
 
-def _route_shift(old_route: Sequence[Point], new_route: Sequence[Point], ahead_mm: float = 1500.0,
-                 step_mm: float = 100.0) -> float:
+def _route_shift(
+    old_route: Sequence[Point],
+    new_route: Sequence[Point],
+    ahead_mm: float = 1500.0,
+    step_mm: float = 100.0,
+) -> float:
     """Mean distance of the new route's first ``ahead_mm`` from the old route."""
     old_segments = list(pairwise(old_route)) or [(old_route[0], old_route[0])]
     samples: list[Point] = []
@@ -507,17 +505,16 @@ def _route_shift(old_route: Sequence[Point], new_route: Sequence[Point], ahead_m
         offset = 0.0
         while offset <= length and travelled + offset <= ahead_mm:
             ratio = 0.0 if length <= 0 else offset / length
-            samples.append((start[0] + (end[0] - start[0]) * ratio,
-                            start[1] + (end[1] - start[1]) * ratio))
+            samples.append(
+                (start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio)
+            )
             offset += step_mm
         travelled += length
         if travelled > ahead_mm:
             break
     if not samples:
         return 0.0
-    return fmean(
-        min(distance_2_segment(point, a, b) for a, b in old_segments) for point in samples
-    )
+    return fmean(min(distance_2_segment(point, a, b) for a, b in old_segments) for point in samples)
 
 
 def _plan_robot(
@@ -624,12 +621,8 @@ def _moving_obstacle_state(obstacle: ScenarioObstacle, simulation_s: float) -> t
         return obstacle.position_mm, (0.0, 0.0)
     x_min, x_max, y_min, y_max = FieldDimensions().bounds_mm
     radius = obstacle.radius_mm
-    x, x_dir = _reflect(
-        obstacle.position_mm[0] + vx * simulation_s, x_min + radius, x_max - radius
-    )
-    y, y_dir = _reflect(
-        obstacle.position_mm[1] + vy * simulation_s, y_min + radius, y_max - radius
-    )
+    x, x_dir = _reflect(obstacle.position_mm[0] + vx * simulation_s, x_min + radius, x_max - radius)
+    y, y_dir = _reflect(obstacle.position_mm[1] + vy * simulation_s, y_min + radius, y_max - radius)
     return (x, y), (vx * x_dir, vy * y_dir)
 
 
@@ -703,7 +696,10 @@ def _collisions(
 
     if split is not None:
         robot_count = len(states) * (len(states) - 1) // 2
-        for name, values in (("robot", clearances[:robot_count]), ("obstacle", clearances[robot_count:])):
+        for name, values in (
+            ("robot", clearances[:robot_count]),
+            ("obstacle", clearances[robot_count:]),
+        ):
             if values:
                 current = split.get(name)
                 split[name] = min(values) if current is None else min(current, min(values))
@@ -751,7 +747,11 @@ def simulate(
     rebuild_ms: list[float] = []
     check_ms: list[float] = []
     reasons = {
-        "active_blocked": 0, "route_blocked": 0, "route_finished": 0, "scheduled": 0, "other": 0
+        "active_blocked": 0,
+        "route_blocked": 0,
+        "route_finished": 0,
+        "scheduled": 0,
+        "other": 0,
     }
     direct_switches = 0
     shifts: list[float] = []
@@ -771,17 +771,13 @@ def simulate(
     simulation_s = 0.0
     next_control_s = 0.0
     next_pace_s = (
-        config.time_scale * _PACING_INTERVAL_WALL_S
-        if config.time_scale is not None
-        else None
+        config.time_scale * _PACING_INTERVAL_WALL_S if config.time_scale is not None else None
     )
     first_cycle = True
     ticks = 0
 
     while True:
-        control_due = first_cycle or (
-            policy != "once" and simulation_s + 1e-9 >= next_control_s
-        )
+        control_due = first_cycle or (policy != "once" and simulation_s + 1e-9 >= next_control_s)
         if control_due:
             for state in states:
                 if state.failed:
@@ -1036,9 +1032,7 @@ def run_experiments(
     if any(not isfinite(p) or p <= 0 for p in periods):
         raise ValueError("replan periods must be positive")
     clearances: tuple[float | None, ...] = (
-        tuple(float(c) for c in clearances_mm)
-        if clearances_mm
-        else (config.planning_clearance_mm,)
+        tuple(float(c) for c in clearances_mm) if clearances_mm else (config.planning_clearance_mm,)
     )
     if any(c is not None and (not isfinite(c) or c < 0) for c in clearances):
         raise ValueError("planning clearances must be non-negative")
@@ -1179,8 +1173,7 @@ def summarize_results(
                 "completion_rate": sum(run.completed for run in runs) / len(runs),
                 "failed_plans": sum(run.failed_plans for run in runs),
                 "collision_episodes": sum(run.collision_episodes for run in runs),
-                "collision_free_rate": sum(run.collision_episodes == 0 for run in runs)
-                / len(runs),
+                "collision_free_rate": sum(run.collision_episodes == 0 for run in runs) / len(runs),
                 "planner_calls_mean": fmean(run.planner_calls for run in runs),
                 "replans_mean": fmean(run.replan_count for run in runs),
                 "replan_failures": sum(run.replan_failures for run in runs),
@@ -1203,7 +1196,8 @@ def summarize_results(
                     run.planning_time_ms_total / max(run.simulated_duration_ms / 1000.0, 1e-9)
                     for run in runs
                 ),
-                "collision_probability": 1.0 - sum(run.collision_episodes == 0 for run in runs) / len(runs),
+                "collision_probability": 1.0
+                - sum(run.collision_episodes == 0 for run in runs) / len(runs),
                 "collision_probability_ci95": _wilson(
                     sum(run.collision_episodes > 0 for run in runs), len(runs)
                 ),
@@ -1225,7 +1219,9 @@ def summarize_results(
                 "replans_route_blocked_mean": fmean(run.replans_route_blocked for run in runs),
                 "direct_path_switches_mean": fmean(run.direct_path_switches for run in runs),
                 "path_shift_mm_mean": fmean(run.path_shift_mm_mean for run in runs),
-                "heading_change_rad_per_m_mean": fmean(run.heading_change_rad_per_m for run in runs),
+                "heading_change_rad_per_m_mean": fmean(
+                    run.heading_change_rad_per_m for run in runs
+                ),
                 "sharp_turns_mean": fmean(run.sharp_turns for run in runs),
                 "path_efficiency_mean": fmean(
                     run.straight_line_mm / run.travelled_distance_mm
@@ -1237,6 +1233,51 @@ def summarize_results(
             }
         )
     return summaries
+
+
+def _code_revision() -> dict:
+    """Git revision of the code that wrote a batch, or None when unknown.
+
+    Every batch under results/acra-* was produced by a different version of
+    this module: runs.csv carries 40, 43, 44, 61 or 62 columns depending on the
+    batch, and nothing in the manifest said which code wrote it. That is why
+    analyse_canonical.py cannot run on acra-6v6-patrol, the batch it is named
+    for: the batch predates the robot-initiated contact columns the analysis
+    requires. Recording the revision makes that kind of drift visible at the
+    point of comparison rather than at the point of failure.
+
+    Never raises: provenance must not fail a batch. A worktree checked out on
+    Windows cannot be read by git under WSL, so None is a normal outcome there.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    try:
+        revision = (
+            subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+            or None
+        )
+        dirty = (
+            subprocess.run(
+                ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+            != ""
+            if revision
+            else None
+        )
+    except Exception:  # noqa: BLE001 - provenance must never fail a batch
+        revision, dirty = None, None
+    return {"code_revision": revision, "code_dirty": dirty}
 
 
 def write_results(
@@ -1281,6 +1322,7 @@ def write_results(
         "radius grown by predicted travel (WorldMap / Obstacle.dynamic_radius_0)",
         "scenario_sets": sorted({result.scenario_set or result.scenario for result in results}),
         "latency_model": "planning latency measured on wall clock; not applied to virtual time",
+        **_code_revision(),
         **(extra_manifest or {}),
     }
     manifest_path = folder / "manifest.json"
@@ -1330,7 +1372,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trials", type=int, default=1, help="Trials per scenario/planner")
     parser.add_argument("--seed", type=int, default=0, help="Base PRM random seed")
     parser.add_argument("--backend", choices=("kinematic", "grsim"), default="kinematic")
-    parser.add_argument("--grsim-bin", type=Path, default=Path(".local/grsim/bin/grSim"))
+    parser.add_argument(
+        "--grsim-bin",
+        type=Path,
+        default=Path(os.environ.get("RESEARCH_GRSIM_BIN", ".local/grsim/bin/grSim")),
+        help="grSim executable (default: $RESEARCH_GRSIM_BIN, else the Linux build in .local/)",
+    )
     parser.add_argument(
         "--dt-ms", type=float, default=None, help="Step in ms (default: kinematic 20, grSim 8.3333)"
     )
@@ -1403,9 +1450,7 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Replanning period(s) in ms, e.g. 20 50 100 200 (default: 1000/--control-hz)",
     )
-    parser.add_argument(
-        "--random", type=int, default=0, help="Add N seeded random scenarios"
-    )
+    parser.add_argument("--random", type=int, default=0, help="Add N seeded random scenarios")
     parser.add_argument(
         "--patrol-fraction",
         type=float,
@@ -1493,9 +1538,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         scenarios, labels, generator = _build_cases(args)
         planners = PLANNER_NAMES if "all" in args.planner else tuple(dict.fromkeys(args.planner))
-        policies = (
-            REPLAN_POLICIES if "all" in args.policy else tuple(dict.fromkeys(args.policy))
-        )
+        policies = REPLAN_POLICIES if "all" in args.policy else tuple(dict.fromkeys(args.policy))
         if args.control_hz <= 0:
             raise ValueError("--control-hz must be positive")
         workers = (os.cpu_count() or 1) if args.workers == 0 else args.workers
@@ -1529,8 +1572,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError("--predict-ms must be non-negative")
         periods = args.replan_ms or [1000.0 / args.control_hz]
         total = (
-            len(scenarios) * len(planners) * len(policies)
-            * len(args.predict_ms) * len(periods) * len(args.clearance_mm or [1]) * args.trials
+            len(scenarios)
+            * len(planners)
+            * len(policies)
+            * len(args.predict_ms)
+            * len(periods)
+            * len(args.clearance_mm or [1])
+            * args.trials
         )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
