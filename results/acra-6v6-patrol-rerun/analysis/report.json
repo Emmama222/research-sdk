@@ -1,0 +1,328 @@
+{
+  "source": "results\\acra-6v6-patrol-rerun",
+  "total_runs": 7800,
+  "safety_metric": "zero robot-initiated robot/obstacle contact episodes (DEC-008)",
+  "robustness": {
+    "prm": {
+      "initial_plan_failures": 19,
+      "scenarios_total": 200,
+      "usable": 181
+    },
+    "visibility": {
+      "initial_plan_failures": 19,
+      "scenarios_total": 200,
+      "usable": 181
+    },
+    "voronoi": {
+      "initial_plan_failures": 4,
+      "scenarios_total": 200,
+      "usable": 196
+    }
+  },
+  "common_intersection_n": 181,
+  "paired_cycle_vs_event": {
+    "prm@h0_p20": {
+      "n_pairs": 181,
+      "cycle_only": 7,
+      "event_only": 4,
+      "diff_pct_points": 1.7,
+      "diff_ci95": [
+        -1.9,
+        5.2
+      ],
+      "p_value": 0.548828,
+      "cycle_pct": 94.5,
+      "event_pct": 92.8,
+      "compute_ratio_cycle_over_event": 7.58
+    },
+    "prm@h0_p100": {
+      "n_pairs": 181,
+      "cycle_only": 5,
+      "event_only": 7,
+      "diff_pct_points": -1.1,
+      "diff_ci95": [
+        -4.9,
+        2.6
+      ],
+      "p_value": 0.774414,
+      "cycle_pct": 84.0,
+      "event_pct": 85.1,
+      "compute_ratio_cycle_over_event": 2.24
+    },
+    "prm@h50_p20": {
+      "n_pairs": 181,
+      "cycle_only": 6,
+      "event_only": 3,
+      "diff_pct_points": 1.7,
+      "diff_ci95": [
+        -1.6,
+        4.9
+      ],
+      "p_value": 0.507812,
+      "cycle_pct": 96.1,
+      "event_pct": 94.5,
+      "compute_ratio_cycle_over_event": 8.3
+    },
+    "prm@h50_p100": {
+      "n_pairs": 181,
+      "cycle_only": 3,
+      "event_only": 2,
+      "diff_pct_points": 0.6,
+      "diff_ci95": [
+        -1.9,
+        3.0
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 95.0,
+      "event_pct": 94.5,
+      "compute_ratio_cycle_over_event": 2.72
+    },
+    "prm@h150_p20": {
+      "n_pairs": 181,
+      "cycle_only": 8,
+      "event_only": 5,
+      "diff_pct_points": 1.7,
+      "diff_ci95": [
+        -2.2,
+        5.6
+      ],
+      "p_value": 0.581055,
+      "cycle_pct": 93.4,
+      "event_pct": 91.7,
+      "compute_ratio_cycle_over_event": 8.9
+    },
+    "prm@h150_p100": {
+      "n_pairs": 181,
+      "cycle_only": 10,
+      "event_only": 5,
+      "diff_pct_points": 2.8,
+      "diff_ci95": [
+        -1.4,
+        6.9
+      ],
+      "p_value": 0.301758,
+      "cycle_pct": 91.7,
+      "event_pct": 89.0,
+      "compute_ratio_cycle_over_event": 3.2
+    },
+    "visibility@h0_p20": {
+      "n_pairs": 181,
+      "cycle_only": 9,
+      "event_only": 10,
+      "diff_pct_points": -0.6,
+      "diff_ci95": [
+        -5.3,
+        4.2
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 87.3,
+      "event_pct": 87.8,
+      "compute_ratio_cycle_over_event": 3.63
+    },
+    "visibility@h0_p100": {
+      "n_pairs": 181,
+      "cycle_only": 10,
+      "event_only": 10,
+      "diff_pct_points": 0.0,
+      "diff_ci95": [
+        -4.8,
+        4.8
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 81.2,
+      "event_pct": 81.2,
+      "compute_ratio_cycle_over_event": 1.85
+    },
+    "visibility@h50_p20": {
+      "n_pairs": 181,
+      "cycle_only": 10,
+      "event_only": 7,
+      "diff_pct_points": 1.7,
+      "diff_ci95": [
+        -2.8,
+        6.1
+      ],
+      "p_value": 0.629059,
+      "cycle_pct": 87.3,
+      "event_pct": 85.6,
+      "compute_ratio_cycle_over_event": 4.29
+    },
+    "visibility@h50_p100": {
+      "n_pairs": 181,
+      "cycle_only": 8,
+      "event_only": 6,
+      "diff_pct_points": 1.1,
+      "diff_ci95": [
+        -2.9,
+        5.2
+      ],
+      "p_value": 0.790527,
+      "cycle_pct": 87.8,
+      "event_pct": 86.7,
+      "compute_ratio_cycle_over_event": 2.04
+    },
+    "visibility@h150_p20": {
+      "n_pairs": 181,
+      "cycle_only": 9,
+      "event_only": 5,
+      "diff_pct_points": 2.2,
+      "diff_ci95": [
+        -1.8,
+        6.2
+      ],
+      "p_value": 0.42395,
+      "cycle_pct": 90.6,
+      "event_pct": 88.4,
+      "compute_ratio_cycle_over_event": 5.76
+    },
+    "visibility@h150_p100": {
+      "n_pairs": 181,
+      "cycle_only": 16,
+      "event_only": 7,
+      "diff_pct_points": 5.0,
+      "diff_ci95": [
+        -0.2,
+        10.1
+      ],
+      "p_value": 0.09314,
+      "cycle_pct": 85.6,
+      "event_pct": 80.7,
+      "compute_ratio_cycle_over_event": 2.4
+    },
+    "voronoi@h0_p20": {
+      "n_pairs": 196,
+      "cycle_only": 5,
+      "event_only": 6,
+      "diff_pct_points": -0.5,
+      "diff_ci95": [
+        -3.8,
+        2.8
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 94.9,
+      "event_pct": 95.4,
+      "compute_ratio_cycle_over_event": 4.84
+    },
+    "voronoi@h0_p100": {
+      "n_pairs": 196,
+      "cycle_only": 13,
+      "event_only": 5,
+      "diff_pct_points": 4.1,
+      "diff_ci95": [
+        -0.1,
+        8.3
+      ],
+      "p_value": 0.096252,
+      "cycle_pct": 88.8,
+      "event_pct": 84.7,
+      "compute_ratio_cycle_over_event": 2.34
+    },
+    "voronoi@h50_p20": {
+      "n_pairs": 196,
+      "cycle_only": 0,
+      "event_only": 0,
+      "diff_pct_points": 0.0,
+      "diff_ci95": [
+        0.0,
+        0.0
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 100.0,
+      "event_pct": 100.0,
+      "compute_ratio_cycle_over_event": 6.47
+    },
+    "voronoi@h50_p100": {
+      "n_pairs": 196,
+      "cycle_only": 8,
+      "event_only": 0,
+      "diff_pct_points": 4.1,
+      "diff_ci95": [
+        1.3,
+        6.9
+      ],
+      "p_value": 0.007812,
+      "cycle_pct": 99.5,
+      "event_pct": 95.4,
+      "compute_ratio_cycle_over_event": 2.95
+    },
+    "voronoi@h150_p20": {
+      "n_pairs": 196,
+      "cycle_only": 2,
+      "event_only": 1,
+      "diff_pct_points": 0.5,
+      "diff_ci95": [
+        -1.2,
+        2.2
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 99.5,
+      "event_pct": 99.0,
+      "compute_ratio_cycle_over_event": 6.39
+    },
+    "voronoi@h150_p100": {
+      "n_pairs": 196,
+      "cycle_only": 3,
+      "event_only": 2,
+      "diff_pct_points": 0.5,
+      "diff_ci95": [
+        -1.7,
+        2.7
+      ],
+      "p_value": 1.0,
+      "cycle_pct": 98.5,
+      "event_pct": 98.0,
+      "compute_ratio_cycle_over_event": 2.87
+    }
+  },
+  "paired_event_vs_once": {
+    "prm": {
+      "n_pairs": 181,
+      "event_only": 91,
+      "once_only": 0,
+      "diff_pct_points": 50.3,
+      "diff_ci95": [
+        43.0,
+        57.6
+      ],
+      "p_value": 0.0,
+      "reference_config": "event h50 p20",
+      "once_pct": 44.2,
+      "event_pct": 94.5
+    },
+    "visibility": {
+      "n_pairs": 181,
+      "event_only": 78,
+      "once_only": 5,
+      "diff_pct_points": 40.3,
+      "diff_ci95": [
+        32.4,
+        48.3
+      ],
+      "p_value": 0.0,
+      "reference_config": "event h50 p20",
+      "once_pct": 45.3,
+      "event_pct": 85.6
+    },
+    "voronoi": {
+      "n_pairs": 196,
+      "event_only": 106,
+      "once_only": 0,
+      "diff_pct_points": 54.1,
+      "diff_ci95": [
+        47.1,
+        61.1
+      ],
+      "p_value": 0.0,
+      "reference_config": "event h50 p20",
+      "once_pct": 45.9,
+      "event_pct": 100.0
+    }
+  },
+  "attribution": {
+    "runs_with_any_obstacle_contact_pct": 42.3,
+    "runs_with_robot_initiated_contact_pct": 12.1,
+    "runs_with_obstacle_initiated_contact_pct": 36.3,
+    "runs_rescued_by_attribution_pct": 30.1,
+    "episode_share_obstacle_initiated_pct": 76.2
+  }
+}

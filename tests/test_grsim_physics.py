@@ -174,9 +174,10 @@ def test_completed_but_invalid_native_run_exits_nonzero(monkeypatch, tmp_path):
 
 native = pytest.mark.skipif(
     os.environ.get("RESEARCH_RUN_PHYSICS") != "1",
-    reason="Set RESEARCH_RUN_PHYSICS=1 in Linux/WSL after scripts/build_grsim.sh",
+    reason="Set RESEARCH_RUN_PHYSICS=1 after scripts/build_grsim.sh (Linux/WSL), or with "
+    "RESEARCH_GRSIM_BIN pointing at a native Windows build (docs/physics.md)",
 )
-BINARY = Path(".local/grsim/bin/grSim")
+BINARY = Path(os.environ.get("RESEARCH_GRSIM_BIN", ".local/grsim/bin/grSim"))
 
 
 @native

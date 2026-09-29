@@ -229,8 +229,6 @@ class GrSimSession:
             raise
 
     def _start(self):
-        if os.name != "posix":
-            raise PhysicsError("Run the native physics backend in Ubuntu/WSL; see docs/physics.md")
         build_path = self.binary.parent.parent / "build.json"
         if not self.binary.is_file() or not build_path.is_file():
             raise PhysicsError("Build the physics engine first: bash scripts/build_grsim.sh")
@@ -277,30 +275,40 @@ class GrSimSession:
         }
         self.log = (self.folder / "grsim.log").open("w", encoding="utf-8")
         self.trace = (self.folder / "trajectory.jsonl").open("w", encoding="utf-8")
-        env = dict(
-            os.environ,
-            RESEARCH_GRSIM_CONFIG=str(profile_path.resolve()),
-            LIBGL_ALWAYS_SOFTWARE="1",
-            QT_QPA_PLATFORM="xcb",
-        )
+        env = dict(os.environ, RESEARCH_GRSIM_CONFIG=str(profile_path.resolve()))
         for sock in self.reservations:
             sock.close()
         self.reservations.clear()
-        virtual_display = shutil.which("xvfb-run")
-        if virtual_display is None:
-            raise PhysicsError("Install xvfb and xauth for the private headless OpenGL display")
-        self.process = subprocess.Popen(
-            [
+        if os.name == "nt":
+            # A native Windows grSim (MSYS2 build, docs/physics.md) needs no
+            # virtual display: --headless opens no window and Qt's windows
+            # platform plugin works in any desktop session. Its Qt, ODE and
+            # MinGW runtime DLLs live with the toolchain, not the binary, so
+            # that directory goes on the PATH of the child process only.
+            dll_dir = os.environ.get("RESEARCH_GRSIM_DLL_DIR", r"C:\msys64\mingw64\bin")
+            if Path(dll_dir).is_dir():
+                env["PATH"] = dll_dir + os.pathsep + env.get("PATH", "")
+            command = [str(self.binary), "--headless"]
+            isolation = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        else:
+            env.update(LIBGL_ALWAYS_SOFTWARE="1", QT_QPA_PLATFORM="xcb")
+            virtual_display = shutil.which("xvfb-run")
+            if virtual_display is None:
+                raise PhysicsError("Install xvfb and xauth for the private headless OpenGL display")
+            command = [
                 virtual_display,
                 "-a",
                 "--server-args=-screen 0 640x480x24",
                 str(self.binary),
                 "--headless",
-            ],
+            ]
+            isolation = {"start_new_session": True}
+        self.process = subprocess.Popen(
+            command,
             env=env,
             stdout=self.log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **isolation,
         )
         return self
 
@@ -395,13 +403,19 @@ class GrSimSession:
 
     def close(self):
         if self.process is not None and self.process.poll() is None:
-            # Stop the process group created by this session only.
-            os.killpg(self.process.pid, signal.SIGTERM)
-            try:
+            if os.name == "nt":
+                # No xvfb wrapper on Windows, so the process IS grSim;
+                # TerminateProcess ends it with no grace period needed.
+                self.process.terminate()
                 self.process.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=3)
+            else:
+                # Stop the process group created by this session only.
+                os.killpg(self.process.pid, signal.SIGTERM)
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                    self.process.wait(timeout=3)
         for stream in (self.trace, self.log, self.receiver, self.sender, *self.reservations):
             if stream is not None:
                 stream.close()

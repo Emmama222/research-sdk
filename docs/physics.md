@@ -27,6 +27,52 @@ and pins the dependency. It does not
 modify grSim's physics implementation. Each run records the actual source diff,
 binary hash, ODE version, robot-model hash and configuration hash.
 
+## Native Windows build (no WSL, no Xvfb)
+
+grSim's source has no Linux-only code; what kept the backend in WSL was the
+toolchain. MSYS2 (`C:\msys64`, installs without admin rights) provides gcc,
+CMake, Ninja, Qt 5.15, ODE 0.16.6 and protobuf as prebuilt packages, so the
+build takes minutes. From an MSYS2 MINGW64 shell, with the source cloned to a
+path without spaces (`%USERPROFILE%\grsim\src`, not `%LOCALAPPDATA%`: a
+packaged app such as the Claude desktop app has `AppData\Local` redirected
+to a private cache, and a build made there is invisible to an ordinary shell)
+and `scripts/grsim-isolated-config.patch` applied:
+
+```bash
+pacman -S --needed git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
+    mingw-w64-x86_64-ninja mingw-w64-x86_64-pkgconf mingw-w64-x86_64-qt5-base \
+    mingw-w64-x86_64-ode mingw-w64-x86_64-protobuf
+export CMAKE_POLICY_VERSION_MINIMUM=3.5   # VarTypes and the bundled protobuf 3.6.1 declare pre-3.5 minimums
+cmake -S src -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_CLIENTS=OFF -DCMAKE_INSTALL_PREFIX=install
+cmake --build build --parallel 8 && cmake --install build
+```
+
+Then stamp the install so the runner accepts it (it refuses a binary whose
+hash is not in `build.json`):
+
+```powershell
+python scripts\record_grsim_build.py --prefix $env:USERPROFILE\grsim\install --source $env:USERPROFILE\grsim\src
+```
+
+On Windows the runner starts `grSim.exe --headless` directly: Qt's windows
+platform plugin needs no virtual display, and the executable's Qt, ODE and
+MinGW runtime DLLs are found by putting `C:\msys64\mingw64\bin` on the child
+process's PATH (`RESEARCH_GRSIM_DLL_DIR` overrides that directory). Point the
+runner at the executable with `--grsim-bin` or `RESEARCH_GRSIM_BIN`:
+
+```powershell
+$env:RESEARCH_GRSIM_BIN = "$env:USERPROFILE\grsim\install\bin\grSim.exe"
+python -m research_sdk.headless scenarios/crowded.json --backend grsim --planner all --trials 3 --output-dir results/physics-crowded
+$env:RESEARCH_RUN_PHYSICS = "1"; python -m pytest tests/test_grsim_physics.py -q
+```
+
+Verified 19 September 2026 on Windows 10 (build 19045), grSim fe2bd29 with
+the patch, ODE 0.16.6: the three native tests (closed loop with evidence,
+motor response and body collision, ball friction) pass in 10 s. The same
+`--headless` mode is used on both platforms; with a window open on this
+machine's integrated graphics the physics loop ran at 0.4 times real time,
+so never run experiments with the GUI.
+
 ## Run experiments
 
 From PowerShell, after building in WSL:
