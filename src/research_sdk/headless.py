@@ -1301,6 +1301,7 @@ def write_results(
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "research_sdk.headless",
+        "provenance": _provenance(),
         "model": "See backend and evidence_directory for each run",
         "backends": sorted({result.backend for result in results}),
         "physics_equivalence": bool(results) and all(r.backend == "grsim" for r in results),
