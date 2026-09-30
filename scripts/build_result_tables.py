@@ -139,7 +139,7 @@ def _write(folder: Path, name: str, header: list[str], body: list[list[str]]) ->
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description="Build the three ACRA 2026 result tables.")
     parser.add_argument("root", type=Path, nargs="?", default=Path("results/acra2026-final"))
     args = parser.parse_args()
     one_shot = _read(args.root / "one-shot-validation" / "summary.csv")
