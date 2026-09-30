@@ -15,6 +15,9 @@ and writes PDF (for LaTeX) and PNG (for review) figures to ``<root>/figures/``:
 4. fig4_replan_latency    Distribution of individual post-initial rebuild
                           latencies per planner, with the 100 ms replan limit.
 5. fig5_route_persistence Mean installed-route lifetime per planner and arm.
+6. fig6_horizon           Prediction horizon effect: strict, physical and
+                          incomplete shares and replans per run against the
+                          horizon, one line per planner.
 
 Figures whose input set is missing are skipped. Colours follow the dataviz
 reference palette; the outcome colours (blue / yellow / red + neutral grey)
@@ -65,7 +68,7 @@ OUTCOME_LABELS = {
     "incomplete": "Incomplete",
 }
 PLANNERS = ("voronoi", "prm", "visibility")
-PLANNER_LABEL = {"voronoi": "Voronoi", "prm": "PRM", "visibility": "Visibility graph"}
+PLANNER_LABEL = {"voronoi": "Voronoi", "prm": "PRM", "visibility": "Visibility Graph"}
 PLANNER_COLOR = {"voronoi": "#2a78d6", "prm": "#eb6834", "visibility": "#1baf7a"}
 ARM_COLOR = {  # palette slots 1-4, fixed order
     ("cycle", 20.0): "#2a78d6",
@@ -373,6 +376,46 @@ def figure_routes(policy: pd.DataFrame | None, out: Path) -> None:
     _save(fig, out, "fig5_route_persistence")
 
 
+# --- figure 6: prediction horizon effect ------------------------------------
+
+
+def figure_horizon(policy: pd.DataFrame | None, sweep: pd.DataFrame | None, out: Path) -> None:
+    """Small multiples: outcome shares and replanning demand against horizon."""
+    if sweep is None:
+        return
+    base = (
+        policy[(policy.replan_policy == "event") & (policy.replan_period_ms == 20.0)
+               & (policy.prediction_horizon_ms == 0.0)]
+        if policy is not None else pd.DataFrame()
+    )
+    rows = pd.concat([base, sweep], ignore_index=True)
+    panels = [
+        ("strict_rate", "Strict\n(% of completed runs)", 100.0),
+        ("physical_rate", "Physical contact\n(% of completed runs)", 100.0),
+        ("incomplete_rate", "Incomplete\n(% of all runs)", 100.0),
+        ("replans_per_run", "Replans\nper run", 1.0),
+    ]
+    fig, axes = plt.subplots(1, len(panels), figsize=(7.0, 2.6))
+    horizons = sorted(rows["prediction_horizon_ms"].unique())
+    for ax, (column, title, scale) in zip(axes, panels):
+        for planner in PLANNERS:
+            sub = rows[rows.planner == planner].sort_values("prediction_horizon_ms")
+            if sub.empty:
+                continue
+            ax.plot(sub["prediction_horizon_ms"], scale * sub[column], color=PLANNER_COLOR[planner],
+                    lw=2, marker="o", ms=5.5, mec=SURFACE, mew=1.5, label=PLANNER_LABEL[planner])
+        ax.set_xticks(horizons, [f"{h:g}" for h in horizons])
+        ax.set_xlabel("Horizon (ms)")
+        ax.set_title(title, loc="left", fontsize=8)
+        ax.set_ylim(bottom=0)
+        _clean(ax, grid_axis="y")
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.tight_layout()
+    fig.subplots_adjust(bottom=0.33, wspace=0.42)
+    fig.legend(handles, labels, loc="lower center", ncol=3, bbox_to_anchor=(0.5, 0.0))
+    _save(fig, out, "fig6_horizon")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the ACRA 2026 paper figures.")
     parser.add_argument("root", type=Path, nargs="?", default=Path("results/acra2026-final"))
@@ -388,6 +431,7 @@ def main() -> int:
     figure_one_shot(robots, out)
     figure_latency(calls, out)
     figure_routes(policy, out)
+    figure_horizon(policy, sweep, out)
     return 0
 
 
