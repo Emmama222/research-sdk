@@ -54,6 +54,7 @@ from research_sdk.planners.common import (
     PlanResult,
     StepRecorder,
     path_length_mm,
+    timed_dijkstra_path,
 )
 from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, PlannerOutput
 from research_sdk.planners.reroute import (
@@ -263,7 +264,7 @@ def plan(
                     graph.add_edge(global_i, global_j, weight=weight)
 
         try:
-            node_path = nx.dijkstra_path(graph, start_idx, goal_idx, weight="weight")
+            node_path = timed_dijkstra_path(graph, start_idx, goal_idx, weight="weight")
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             seed = None if seed is None else seed + 1
             rng = np.random.default_rng(seed)

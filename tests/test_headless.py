@@ -137,6 +137,8 @@ def test_batch_summary_and_exports_are_research_ready(tmp_path) -> None:
         "runs_json",
         "summary_csv",
         "summary_json",
+        "summary_legacy_csv",
+        "rebuild_calls_csv",
         "manifest",
     }
     with paths["runs_csv"].open(newline="") as stream:

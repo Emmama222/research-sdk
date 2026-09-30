@@ -11,10 +11,10 @@ import networkx as nx
 from research_sdk.config import (
     DEFENCE_X_MM,
     DEFENCE_Y_MM,
-    FIELD_X_MIN,
     FIELD_X_MAX,
-    FIELD_Y_MIN,
+    FIELD_X_MIN,
     FIELD_Y_MAX,
+    FIELD_Y_MIN,
     GOAL_DEPTH_MM,
     GOAL_HALF_WIDTH_MM,
     ROBOT_RADIUS_MM,
@@ -29,13 +29,12 @@ from research_sdk.config import (
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_TARGET_DEAD_ZONE_MM,
 )
-from research_sdk.planners.common import StepRecorder
+from research_sdk.planners.common import StepRecorder, timed_dijkstra_path
 from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.map.voronoi.voronoi_generator import (
     VoronoiObstacle,
     generate_voronoi_map_from_scene,
 )
-
 
 Point = tuple[float, float]
 RobotKey = tuple[bool, int]
@@ -408,7 +407,7 @@ class VoronoiDijkstraPlanner:
             for neighbour_id, cost in edges:
                 graph.add_edge(node_id, neighbour_id, weight=cost)
         try:
-            return nx.dijkstra_path(graph, start_id, target_id, weight="weight")
+            return timed_dijkstra_path(graph, start_id, target_id, weight="weight")
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return []
 

@@ -26,3 +26,16 @@ dated folder and the superseded one moves to the archive.
 `plot_prediction_horizon.py`, `plot_tradeoff.py` and `report_batch.py` default
 to paths under the old `results/acra-*` names. Pass the batch path explicitly
 (now under `results/_archive-pre-dec016/`) to rerun them on historical data.
+
+## Commands (Windows, from the repo root, single worker for clean latency)
+
+```powershell
+python -m research_sdk.headless --result-set one-shot-validation --output-dir results/acra2026-final/one-shot-validation
+python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
+python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
+python scripts/build_result_tables.py
+```
+
+Tables are written to `results/acra2026-final/tables/` as CSV and Markdown.
+Failure rules (DEC-019): a post-initial replan over 100 ms stops that robot;
+any robot without a route for 500 ms fails the episode.

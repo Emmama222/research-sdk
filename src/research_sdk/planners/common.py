@@ -19,8 +19,40 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from time import perf_counter
 
+import networkx as nx
+
 FIELD_LENGTH_MM = 9000.0
 FIELD_WIDTH_MM = 6000.0
+
+# Search-stage timing (ACRA DEC-018). Every planner routes its single
+# shortest-path call through ``timed_dijkstra_path`` so the headless evaluator
+# can split one planning call into Dijkstra search and everything else (map or
+# roadmap construction, collision checks, smoothing) with the same boundary for
+# all three planners. The counter is process-local; the evaluator runs one
+# planning call at a time per process.
+_search_time_s = 0.0
+
+
+def timed_dijkstra_path(graph, source, target, weight: str = "weight"):
+    """``networkx.dijkstra_path`` whose wall time is added to the search counter."""
+    global _search_time_s
+    started = perf_counter()
+    try:
+        return nx.dijkstra_path(graph, source, target, weight=weight)
+    finally:
+        _search_time_s += perf_counter() - started
+
+
+def reset_search_time() -> None:
+    """Zero the search counter before a timed planning call."""
+    global _search_time_s
+    _search_time_s = 0.0
+
+
+def search_time_ms() -> float:
+    """Dijkstra time accumulated since the last ``reset_search_time``."""
+    return _search_time_s * 1000.0
+
 
 # Standard SSL robot radius is ~90mm (max diameter 180mm per the rules).
 DEFAULT_ROBOT_RADIUS_MM = 90.0
