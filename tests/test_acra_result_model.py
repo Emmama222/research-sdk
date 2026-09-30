@@ -146,16 +146,16 @@ def test_initial_no_route_waits_and_retries(monkeypatch) -> None:
     assert result.robots_stopped_no_path == 0
 
 
-def test_robot_without_route_for_500_ms_fails_the_episode(monkeypatch) -> None:
+def test_robot_without_route_for_1000_ms_fails_the_episode(monkeypatch) -> None:
     _patch_planner(monkeypatch, failures=None)
     config = SimulationConfig(replan_policy="event", control_period_s=0.02)
     result = simulate(_straight(), "visibility", config=config)
     assert not result.completed and result.outcome == "I"
     assert result.episode_end_reason == "no_valid_path"
-    assert "no_valid_path@500ms" in result.stopped_robots
-    assert result.simulated_duration_ms == pytest.approx(500.0)
-    assert result.initial_wait_ms_max == pytest.approx(500.0)
-    assert result.initial_retries_total == 26  # attempts at 0, 20, ..., 500 ms
+    assert "no_valid_path@1000ms" in result.stopped_robots
+    assert result.simulated_duration_ms == pytest.approx(1000.0)
+    assert result.initial_wait_ms_max == pytest.approx(1000.0)
+    assert result.initial_retries_total == 51  # attempts at 0, 20, ..., 1000 ms
 
 
 def test_no_route_ends_the_episode_for_the_whole_team(monkeypatch) -> None:
@@ -184,7 +184,7 @@ def test_no_route_ends_the_episode_for_the_whole_team(monkeypatch) -> None:
     result = simulate(scenario, "visibility", config=SimulationConfig(replan_policy="event"))
     assert result.episode_end_reason == "no_valid_path"
     assert result.outcome == "I"
-    assert result.simulated_duration_ms <= 520.0
+    assert result.simulated_duration_ms <= 1020.0
 
 
 def test_slow_replan_stops_only_that_robot_and_initial_plan_is_exempt() -> None:
@@ -283,7 +283,7 @@ def test_exports_include_rebuild_calls_and_keep_runs_flat(tmp_path) -> None:
     assert "rebuild_latencies_ms" not in header and "outcome" in header
     with paths["rebuild_calls_csv"].open(newline="") as stream:
         calls = list(csv.DictReader(stream))
-    assert len(calls) == results[0].rebuild_attempts
+    assert len(calls) == results[0].successful_rebuilds
 
 
 def test_one_shot_validation_reports_stage_timing_and_geometry() -> None:
@@ -395,7 +395,7 @@ def test_rebuild_latency_statistics_match_the_raw_call_log() -> None:
     config = SimulationConfig(replan_policy="cycle", control_period_s=0.02)
     result = simulate(_crossing(), "voronoi", config=config)
     raw = result.rebuild_latencies_ms
-    assert raw and result.rebuild_attempts == len(raw)
+    assert raw and result.successful_rebuilds == len(raw)
     assert (result.rebuild_ms_min, result.rebuild_ms_max) == (min(raw), max(raw))
     assert result.rebuild_ms_total == pytest.approx(sum(raw))
     (row,) = summarize_outcomes([result])
@@ -410,3 +410,53 @@ def test_timing_stages_sum_to_the_planning_call() -> None:
     assert result.initial_search_ms_total + result.initial_map_ms_total == pytest.approx(
         result.planning_time_ms_initial
     )
+
+
+def test_bank_run_does_not_copy_the_scenarios_into_the_results(tmp_path) -> None:
+    _write_bank(tmp_path / "bank", ["a", "b"])
+    out = tmp_path / "out"
+    code = headless.main(
+        ["--scenario-bank", str(tmp_path / "bank"), "--planner", "visibility", "--output-dir", str(out)]
+    )
+    assert code == 0
+    assert not (out / "scenarios").exists()
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["scenario_bank_files"] == 2 and len(manifest["scenario_bank_sha256"]) == 64
+    assert manifest["scenarios"] == ["a", "b"]
+
+
+@pytest.mark.parametrize("planner_name", ["voronoi", "prm", "visibility"])
+def test_clear_straight_line_is_a_check_not_a_rebuild(planner_name: str) -> None:
+    # Nothing is in the way, so every cycle call only confirms the direct line.
+    config = SimulationConfig(replan_policy="cycle", control_period_s=0.02)
+    result = simulate(_straight(), planner_name, config=config)
+    assert result.completed
+    assert result.successful_rebuilds == 0
+    assert result.event_checks > 0
+
+
+def test_failed_replans_are_counted_but_kept_out_of_latency(monkeypatch) -> None:
+    real = headless._new_planner
+
+    class _OnlyFirstCall:
+        def __init__(self, inner):
+            self.inner = inner
+            self.calls = 0
+
+        def plan(self, planner_input):
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("replan failed")
+            return self.inner.plan(planner_input)
+
+        def reset(self, **kwargs):
+            return self.inner.reset(**kwargs)
+
+    monkeypatch.setattr(headless, "_new_planner", lambda *a, **k: _OnlyFirstCall(real(*a, **k)))
+    config = SimulationConfig(replan_policy="cycle", no_route_limit_ms=None)
+    result = simulate(_crossing(), "visibility", config=config)
+    assert result.replan_failures > 0
+    assert result.successful_rebuilds == 0 and result.rebuild_latencies_ms == ()
+    (row,) = summarize_outcomes([result])
+    assert row["replan_ms_mean"] is None
+    assert row["failed_replan_share"] == 1.0

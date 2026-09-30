@@ -31,6 +31,7 @@ python -m research_sdk.headless --result-set one-shot-validation --output-dir re
 python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
 python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
 python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
 ```
 
 The one-shot set takes well under a minute. The two dynamic sets use one

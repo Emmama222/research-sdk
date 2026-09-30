@@ -121,7 +121,7 @@ percentiles, path lengths, final error and worst clearance).
 --expect-scenarios N
 --result-set one-shot-validation|policy-comparison|horizon-sweep
 --slow-call-limit-ms MS           # default 100; 0 disables
---no-route-limit-ms MS            # default 500; 0 disables
+--no-route-limit-ms MS            # default 1000; 0 disables
 --fail-on-incomplete
 ~~~
 
@@ -203,19 +203,23 @@ else can be mixed in.
 |---|---|---:|
 | `one-shot-validation` | Frozen obstacles, one route per robot, nothing executed | 600 |
 | `policy-comparison` | cycle and event at 20 ms and 100 ms, horizon 0 ms | 2,400 |
-| `horizon-sweep` | event at 20 ms, horizon 20 / 50 / 150 ms (the 0 ms point is the policy comparison's event @ 20 ms arm) | 1,800 |
+| `horizon-sweep` | event at 20 ms, horizon 20 / 50 / 100 ms (the 0 ms point is the policy comparison's event @ 20 ms arm) | 1,800 |
 
 ~~~powershell
 python -m research_sdk.headless --result-set one-shot-validation --output-dir results/acra2026-final/one-shot-validation
 python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
 python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
 python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
 ~~~
 
 Use `--workers 1` on one named machine for the dynamic sets: the replan time
 limit and all latency columns are wall-clock measurements.
 `build_result_tables.py` writes the three paper tables as CSV and Markdown to
-`results/acra2026-final/tables/`.
+`results/acra2026-final/tables/`; `plot_outcomes.py` writes five figures (PDF
+and PNG) to `results/acra2026-final/figures/`: outcome breakdown, compute vs
+safety, one-shot planning time, rebuild latency distribution and route
+lifetime.
 
 ### Scenario bank rules
 
@@ -255,7 +259,7 @@ contact is not recorded.
   `time_limit`. The rest of the team continues. The call's time includes the
   route check, the map or roadmap rebuild and every Dijkstra search in the
   call (for PRM, up to its 5 resampling attempts).
-- **No-route limit:** any robot that goes 500 ms of simulated time without a
+- **No-route limit:** any robot that goes 1000 ms of simulated time without a
   valid route (`--no-route-limit-ms`) fails and ends the episode, flagged
   `no_valid_path`.
 - The initial plan is exempt from the time limit and reported as one-shot
@@ -279,12 +283,15 @@ One row per planner and arm. Counts keep their denominators.
 | `initial_retries_per_run`, `initial_wait_ms_per_run`, `initial_wait_ms_max` | Initial no-route cost |
 | `replans_per_run`, `failed_replans_per_run`, `blocked_time_pct_mean` | Replanning demand; blocked time uses the DEC-015 normalisation |
 | `routes_per_run`, `route_lifetime_ms_mean`, `route_lifetime_ms_max` | How long installed routes stay in use |
-| `replan_ms_min`, `_mean`, `_p95`, `_max` | Pooled over every individual post-initial rebuild attempt |
+| `replan_ms_min`, `_mean`, `_p95`, `_max` | Pooled over every successful post-initial rebuild; failed attempts are excluded here and counted in `failed_replans_per_run` and `failed_replan_share` |
+| `successful_rebuilds`, `failed_replan_share` | Successful rebuilds, and failed attempts as a share of all rebuild attempts |
 | `event_check_ms_mean` | Mean cost of a check that kept the route |
 | `initial_plan_ms_mean`, `initial_search_ms_mean`, `initial_map_ms_mean` | Initial plan split into Dijkstra search and everything else |
 
 Per-run values are means over valid runs. Each individual rebuild latency is in
-`rebuild_calls.csv`, so any latency statistic can be recomputed.
+`rebuild_calls.csv` (successful rebuilds), so any latency statistic can be recomputed.
+A rebuild attempt is a call that produced a new multi-waypoint route or no route
+at all; a result that only confirms the direct line counts as a check.
 
 ### One-shot validation output
 

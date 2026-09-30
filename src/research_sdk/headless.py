@@ -88,7 +88,7 @@ RESULT_SETS: dict[str, tuple[tuple[str, float, float], ...]] = {
     "horizon-sweep": (
         ("event", 20.0, 20.0),
         ("event", 50.0, 20.0),
-        ("event", 150.0, 20.0),
+        ("event", 100.0, 20.0),
     ),
 }
 TIME_SCALE_CHOICES = (1, 10, 100, 200, 500)
@@ -119,7 +119,7 @@ class SimulationConfig:
     # construction) is exempt and reported as one-shot timing. Any robot that
     # goes ``no_route_limit_ms`` of simulated time without a valid route fails
     # and ends the episode (``no_valid_path``).
-    no_route_limit_ms: float | None = 500.0
+    no_route_limit_ms: float | None = 1000.0
     slow_call_limit_ms: float | None = 100.0
 
     def __post_init__(self) -> None:
@@ -266,8 +266,9 @@ class HeadlessRunResult:
     route_ends_episode_end: int = 0
     # Per robot "B0:3r/60ms" = 3 failed initial attempts, 60 ms waiting.
     initial_route_by_robot: str = ""
-    # Post-initial rebuild attempts only (initial plans and checks excluded).
-    rebuild_attempts: int = 0
+    # Successful post-initial rebuilds only: failed attempts are counted in
+    # ``replan_failures`` and kept out of the latency statistics (DEC-019).
+    successful_rebuilds: int = 0
     rebuild_ms_min: float | None = None
     rebuild_ms_max: float | None = None
     rebuild_ms_total: float = 0.0
@@ -508,9 +509,6 @@ def _plan_call(
         output = None
     elapsed_ms = (perf_counter() - started) * 1000.0
     record["search_ms"] = min(search_time_ms(), elapsed_ms)
-    # A post-initial call counts as a rebuild attempt when the planner actually
-    # rebuilt (or raised); cheap event checks that kept the route do not.
-    record["rebuild_attempted"] = not first and (output is None or bool(output.did_reroute))
     waypoints = (
         ()
         if output is None
@@ -1025,6 +1023,11 @@ def simulate(
                 )
                 call_durations_ms.append(elapsed_ms)
                 kind = record.get("kind")
+                # A post-initial rebuild attempt either produced a new multi-waypoint
+                # route or produced no route at all. A result that only confirms the
+                # direct line (``check`` / ``switch_direct``) is a check, even when the
+                # planner reports it rerouted -- e.g. after the cycle policy's reset.
+                record["rebuild_attempted"] = not first and kind in ("rebuild", "failed")
                 if kind in ("initial", "rebuild"):
                     rebuild_ms.append(elapsed_ms)
                 else:
@@ -1049,8 +1052,9 @@ def simulate(
                         state.awaiting_route = True
                 else:
                     if record.get("rebuild_attempted"):
-                        rebuild_attempt_ms.append(elapsed_ms)
-                        rebuild_search_ms.append(record["search_ms"])
+                        if kind == "rebuild":  # failures count, but not in latency
+                            rebuild_attempt_ms.append(elapsed_ms)
+                            rebuild_search_ms.append(record["search_ms"])
                     else:
                         event_check_ms.append(elapsed_ms)
                     if kind in ("rebuild", "switch_direct") and state.route_started_s is not None:
@@ -1332,7 +1336,7 @@ def simulate(
             f"{wait * 1000.0:.0f}ms"
             for state, wait in zip(states, initial_waits_s)
         ),
-        rebuild_attempts=len(rebuild_attempt_ms),
+        successful_rebuilds=len(rebuild_attempt_ms),
         rebuild_ms_min=min(rebuild_attempt_ms, default=None),
         rebuild_ms_max=max(rebuild_attempt_ms, default=None),
         rebuild_ms_total=sum(rebuild_attempt_ms),
@@ -1653,7 +1657,8 @@ def summarize_outcomes(
     for completion and incompletion; ``completed`` for strict, buffer-only and
     physical rates; failed completions ``F = B + P`` and physical runs ``P`` for
     contact severity. Per-run quantities are means over valid runs. Replan
-    latency statistics pool every individual post-initial rebuild attempt.
+    latency statistics pool every successful post-initial rebuild; failed
+    attempts are counted separately.
     Invalid runs (initial overlap) are counted but excluded from everything else.
     """
     groups: dict[tuple, list[HeadlessRunResult]] = {}
@@ -1757,7 +1762,11 @@ def summarize_outcomes(
                 "route_lifetime_ms_max": max(
                     (run.route_lifetime_ms_max for run in valid), default=None
                 ),
-                "rebuild_attempts": len(latencies),
+                "successful_rebuilds": len(latencies),
+                "failed_replan_share": _rate(
+                    sum(run.replan_failures for run in valid),
+                    sum(run.replan_failures for run in valid) + len(latencies),
+                ),
                 "replan_ms_min": min(latencies, default=None),
                 "replan_ms_mean": _mean_or_none(latencies),
                 "replan_ms_p95": _percentile(latencies, 0.95) if latencies else None,
@@ -1867,6 +1876,10 @@ def summarize_one_shot(
         searches = [float(row["search_ms"]) for row in planner_rows]
         maps = [float(row["map_ms"]) for row in planner_rows]
         full = sum(all(r["route_available"] for r in group) for group in scenarios.values())
+        # Requests with a clear straight line need no map (~0.03 ms) and dominate
+        # the means; the planners differ only on requests that needed a map.
+        mapped = [r for r in ok if int(r["waypoints"]) > 2]
+        mapped_ms = [float(r["total_ms"]) for r in mapped]
         summaries.append(
             {
                 "planner": planner,
@@ -1883,6 +1896,12 @@ def summarize_one_shot(
                 "total_ms_mean": _mean_or_none(totals),
                 "total_ms_p95": _percentile(totals, 0.95) if totals else None,
                 "total_ms_max": max(totals, default=None),
+                "map_requiring_calls": len(mapped),
+                "map_requiring_ms_median": median(mapped_ms) if mapped_ms else None,
+                "map_requiring_ms_p95": _percentile(mapped_ms, 0.95) if mapped_ms else None,
+                "map_requiring_path_excess_median": (
+                    median([float(r["path_excess"]) for r in mapped]) if mapped else None
+                ),
                 "scenario_initial_plan_ms_mean": _mean_or_none(
                     [sum(float(r["total_ms"]) for r in group) for group in scenarios.values()]
                 ),
@@ -2278,8 +2297,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-route-limit-ms",
         type=float,
-        default=500.0,
-        help="Fail the episode when any robot goes this long without a route (0 disables)",
+        default=1000.0,
+        help="Fail the episode when any robot goes this long without a route (default 1000; 0 disables)",
     )
     parser.add_argument(
         "--slow-call-limit-ms",

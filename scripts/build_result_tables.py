@@ -50,15 +50,17 @@ def _planner(row: dict[str, str]) -> str:
 
 def one_shot_table(rows: list[dict[str, str]]) -> tuple[list[str], list[list[str]]]:
     header = [
-        "Planner", "Routes (robots)", "Scenarios with all routes", "Map ms (mean)",
-        "Dijkstra ms (mean)", "Total ms (mean)", "Total ms (P95)", "Total ms (max)",
-        "Path excess", "Turning rad/m", "Turns >90° per route",
+        "Planner", "Routes (robots)", "Scenarios with all routes", "Map-requiring requests",
+        "Median ms (map-requiring)", "P95 ms (map-requiring)", "Path excess (map-requiring, median)",
+        "Map ms (mean, all)", "Dijkstra ms (mean, all)", "Total ms (max)",
+        "Turning rad/m", "Turns >90° per route",
     ]
     body = [
         [
             _planner(r), r["robot_routes_label"], r["scenarios_all_routes_label"],
-            _num(r["map_ms_mean"], 2), _num(r["search_ms_mean"], 3), _num(r["total_ms_mean"], 2),
-            _num(r["total_ms_p95"], 2), _num(r["total_ms_max"], 2), _pct(r["path_excess_mean"]),
+            r.get("map_requiring_calls", "–"), _num(r.get("map_requiring_ms_median"), 2),
+            _num(r.get("map_requiring_ms_p95"), 2), _pct(r.get("map_requiring_path_excess_median")),
+            _num(r["map_ms_mean"], 2), _num(r["search_ms_mean"], 3), _num(r["total_ms_max"], 2),
             _num(r["turning_rad_per_m_mean"], 2), _num(r["sharp_turns_per_route"], 2),
         ]
         for r in sorted(rows, key=lambda r: PLANNER_ORDER.get(r["planner"], 9))
@@ -71,8 +73,9 @@ DYNAMIC_HEADER = [
     "RO contacts /F", "Contacts /F", "Episodes failed (no route)",
     "Robots stopped (replan >100 ms)",
     "Initial retries /run", "Initial wait ms /run", "Replans /run", "Failed replans /run",
-    "Blocked time %", "Avg route alive ms", "Longest route alive ms", "Min replan ms",
-    "Mean replan ms", "P95 replan ms", "Max replan ms",
+    "Failed replan share", "Blocked time %", "Avg route alive ms", "Longest route alive ms",
+    "Min replan ms (successful)", "Mean replan ms (successful)", "P95 replan ms (successful)",
+    "Max replan ms (successful)",
 ]
 
 
@@ -85,7 +88,7 @@ def _dynamic_cells(r: dict[str, str]) -> list[str]:
         r["robots_stopped_time_limit"],
         _num(r["initial_retries_per_run"], 2), _num(r["initial_wait_ms_per_run"], 0),
         _num(r["replans_per_run"], 1), _num(r["failed_replans_per_run"], 1),
-        _num(r["blocked_time_pct_mean"], 2), _num(r["route_lifetime_ms_mean"], 0),
+        _pct(r["failed_replan_share"]), _num(r["blocked_time_pct_mean"], 2), _num(r["route_lifetime_ms_mean"], 0),
         _num(r["route_lifetime_ms_max"], 0), _num(r["replan_ms_min"], 3),
         _num(r["replan_ms_mean"], 2), _num(r["replan_ms_p95"], 2), _num(r["replan_ms_max"], 2),
     ]
