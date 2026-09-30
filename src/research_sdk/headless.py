@@ -1301,7 +1301,8 @@ def write_results(
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "research_sdk.headless",
-        "provenance": _provenance(),
+        # Keep the manifest helper name aligned with the implementation above.
+        "provenance": _code_revision(),
         "model": "See backend and evidence_directory for each run",
         "backends": sorted({result.backend for result in results}),
         "physics_equivalence": bool(results) and all(r.backend == "grsim" for r in results),
@@ -1362,6 +1363,12 @@ def _parser() -> argparse.ArgumentParser:
         "scenarios",
         nargs="*",
         help="Scenario JSON files or directories (default: scenarios/)",
+    )
+    parser.add_argument(
+        "--scenario-bank",
+        type=Path,
+        default=None,
+        help="Explicit scenario directory for a reproducible matched bank; cannot be combined with positional scenarios",
     )
     parser.add_argument(
         "--planner",
@@ -1514,8 +1521,11 @@ def _build_cases(args) -> tuple[list[Scenario], list[str], GeneratorConfig]:
         jitter_mm=args.jitter_mm,
     )
     scenario_seed = args.seed if args.scenario_seed is None else args.scenario_seed
-    only_random = args.random > 0 and not args.scenarios
-    saved = [] if only_random else _load_scenarios(_scenario_paths(args.scenarios))
+    if args.scenario_bank is not None and args.scenarios:
+        raise ValueError("--scenario-bank cannot be combined with positional scenarios")
+    scenario_inputs = [str(args.scenario_bank)] if args.scenario_bank is not None else args.scenarios
+    only_random = args.random > 0 and not scenario_inputs
+    saved = [] if only_random else _load_scenarios(_scenario_paths(scenario_inputs))
     scenarios: list[Scenario] = []
     labels: list[str] = []
     for base in saved:

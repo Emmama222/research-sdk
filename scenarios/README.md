@@ -15,8 +15,21 @@ the `add_obstacle` course tool.
 Scenario files are reproducible experiment inputs and should be committed when
 they form part of a reported result.
 
-The frozen ACRA 2026 evaluation bank is stored in `acra2026-200/`. Render the
-whole bank without running an experiment using:
+The frozen ACRA 2026 evaluation bank is stored in `acra2026-200/`. It contains
+six robots with six start-to-goal pairs and six moving patrol obstacles in every
+scenario. Generate or rework it without running a headless simulation using:
+
+```powershell
+python scripts/generate_acra_scenarios.py --force
+```
+
+Use the bank explicitly in a future headless run with:
+
+```powershell
+python -m research_sdk.headless --scenario-bank scenarios/acra2026-200
+```
+
+Render the whole bank without running an experiment using:
 
 ```powershell
 python scripts/report_batch.py --scenario-only `

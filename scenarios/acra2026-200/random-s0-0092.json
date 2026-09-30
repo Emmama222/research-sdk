@@ -1,0 +1,261 @@
+{
+  "name": "random-s0-0092",
+  "robots": [
+    {
+      "robot_id": 0,
+      "is_yellow": false,
+      "start_mm": [
+        1780.7,
+        1819.1
+      ],
+      "target_mm": [
+        -1139.0,
+        -2668.3
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 1,
+      "is_yellow": false,
+      "start_mm": [
+        -76.8,
+        2591.1
+      ],
+      "target_mm": [
+        1215.7,
+        -2496.0
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 2,
+      "is_yellow": false,
+      "start_mm": [
+        1702.9,
+        2339.2
+      ],
+      "target_mm": [
+        3933.1,
+        2339.0
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 3,
+      "is_yellow": false,
+      "start_mm": [
+        2008.1,
+        -2323.3
+      ],
+      "target_mm": [
+        -3360.9,
+        -985.2
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 4,
+      "is_yellow": false,
+      "start_mm": [
+        2405.1,
+        1417.2
+      ],
+      "target_mm": [
+        -1412.0,
+        -2614.6
+      ],
+      "orientation_rad": 0.0
+    },
+    {
+      "robot_id": 5,
+      "is_yellow": false,
+      "start_mm": [
+        2348.8,
+        516.7
+      ],
+      "target_mm": [
+        -3654.4,
+        -764.6
+      ],
+      "orientation_rad": 0.0
+    }
+  ],
+  "obstacles": [
+    {
+      "obstacle_id": 0,
+      "is_yellow": true,
+      "position_mm": [
+        -2647.8,
+        1620.3
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          -3877.0,
+          -2647.4
+        ],
+        [
+          -3511.2,
+          -2474.3
+        ],
+        [
+          -1034.1,
+          856.1
+        ]
+      ],
+      "patrol_speed_mmps": 304.1
+    },
+    {
+      "obstacle_id": 1,
+      "is_yellow": true,
+      "position_mm": [
+        -1179.4,
+        1653.9
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          559.2,
+          -1840.5
+        ],
+        [
+          -1334.1,
+          -2325.0
+        ],
+        [
+          -272.3,
+          -2585.6
+        ]
+      ],
+      "patrol_speed_mmps": 587.4
+    },
+    {
+      "obstacle_id": 2,
+      "is_yellow": true,
+      "position_mm": [
+        2298.1,
+        1050.4
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          -1934.5,
+          -1988.0
+        ],
+        [
+          -1163.8,
+          659.0
+        ],
+        [
+          -4172.0,
+          9.4
+        ]
+      ],
+      "patrol_speed_mmps": 564.6
+    },
+    {
+      "obstacle_id": 3,
+      "is_yellow": true,
+      "position_mm": [
+        -909.4,
+        -2033.5
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          3134.1,
+          1039.6
+        ],
+        [
+          257.6,
+          -1628.2
+        ],
+        [
+          -3289.9,
+          1563.8
+        ]
+      ],
+      "patrol_speed_mmps": 610.9
+    },
+    {
+      "obstacle_id": 4,
+      "is_yellow": true,
+      "position_mm": [
+        2171.3,
+        -397.8
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          -2679.5,
+          -313.5
+        ],
+        [
+          -1739.2,
+          -697.8
+        ],
+        [
+          -1341.2,
+          1363.5
+        ]
+      ],
+      "patrol_speed_mmps": 341.2
+    },
+    {
+      "obstacle_id": 5,
+      "is_yellow": true,
+      "position_mm": [
+        2908.2,
+        -251.9
+      ],
+      "radius_mm": 90.0,
+      "velocity_mmps": [
+        0.0,
+        0.0
+      ],
+      "planner_keys": [],
+      "patrol_waypoints": [
+        [
+          -2542.5,
+          -454.8
+        ],
+        [
+          2321.4,
+          -1372.9
+        ],
+        [
+          31.1,
+          269.3
+        ]
+      ],
+      "patrol_speed_mmps": 770.6
+    }
+  ],
+  "ball": null,
+  "schema_version": 3
+}
