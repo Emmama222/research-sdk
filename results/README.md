@@ -14,7 +14,7 @@ Ad-hoc headless runs without `--output-dir` are written to `results/headless/<ti
 |---|---|---|---:|
 | One-Shot Planning Validation | `one-shot-validation/` | Frozen obstacles, one route per robot, no execution | 600 |
 | Dynamic Replanning Policy Comparison | `policy-comparison/` | Cycle and event at 20 ms and 100 ms checks, horizon 0 ms | 2,400 |
-| Prediction Horizon Sweep | `horizon-sweep/` | Event at 20 ms checks, horizon 20 / 50 / 150 ms (0 ms point reused from the policy comparison) | 1,800 |
+| Prediction Horizon Sweep | `horizon-sweep/` | Event at 20 ms checks, horizon 20 / 50 / 100 ms (0 ms point reused from the policy comparison) | 1,800 |
 
 Each folder is written once and never overwritten. A re-run goes into a new,
 dated folder and the superseded one moves to the archive.
@@ -34,8 +34,9 @@ python -m research_sdk.headless --result-set one-shot-validation --output-dir re
 python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
 python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
 python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
 ```
 
 Tables are written to `results/acra2026-final/tables/` as CSV and Markdown.
 Failure rules (DEC-019): a post-initial replan over 100 ms stops that robot;
-any robot without a route for 500 ms fails the episode.
+any robot without a route for 1000 ms fails the episode.
