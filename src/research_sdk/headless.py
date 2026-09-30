@@ -2418,12 +2418,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
             return 0
-        scenario_folder = output_folder / "scenarios"
-        scenario_folder.mkdir(parents=True, exist_ok=True)
-        for scenario in scenarios:
-            (scenario_folder / f"{scenario.name}.json").write_text(
-                json.dumps(scenario.to_dict(), indent=2), encoding="utf-8"
-            )
+        output_folder.mkdir(parents=True, exist_ok=True)
+        if args.scenario_bank is None:
+            # Generated or loose scenarios: keep a copy so the batch is reproducible.
+            # A frozen bank is not copied; the manifest records its path, file
+            # count and SHA-256 fingerprint instead.
+            scenario_folder = output_folder / "scenarios"
+            scenario_folder.mkdir(parents=True, exist_ok=True)
+            for scenario in scenarios:
+                (scenario_folder / f"{scenario.name}.json").write_text(
+                    json.dumps(scenario.to_dict(), indent=2), encoding="utf-8"
+                )
         if any(h < 0 for h in args.predict_ms):
             raise ValueError("--predict-ms must be non-negative")
         periods = args.replan_ms or [1000.0 / args.control_hz]
@@ -2440,7 +2445,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
-            f" x {len(policies)} policies x {args.trials} trials on {workers} worker(s)"
+            + (
+                f" x {len(RESULT_SETS[args.result_set])} arms ({args.result_set})"
+                if args.result_set
+                else f" x {len(policies)} policies"
+            )
+            + f" x {args.trials} trials on {workers} worker(s)"
             f" at {f'{args.time_scale}x cap' if args.time_scale else 'maximum speed'}",
             flush=True,
         )
