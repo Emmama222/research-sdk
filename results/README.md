@@ -3,6 +3,7 @@
 | Folder | Status | Contents |
 |---|---|---|
 | `acra2026-final/` | **Current** — the only source for final ACRA 2026 claims | The three result sets below, generated from the frozen scenario bank `scenarios/acra2026-200` with the revised measurement set (DEC-016/017/018) |
+| `_archive-pre-dec023/` | Superseded 1 Oct 2026 — do not use for final claims | The full set after DEC-022 but before DEC-023 (Voronoi's per-tick checks without the 30 mm margin). Reference for the margin ablation; see its `README.md` |
 | `_archive-pre-shared-escape/` | Superseded 1 Oct 2026 — do not use for final claims | The full ACRA 2026 set before DEC-022 (only Voronoi had an escape step). Voronoi numbers remain a reference; see its `README.md` |
 | `_archive-pre-dec016/` | Historical — do not use for final claims | Every batch produced before the revised result model (17–20 Sep 2026). See its own `README.md` for what each batch contains |
 | `plot_empty_voronoi.py`, `voronoi_empty_virtual_sites.svg` | Current | Figure of the bounded Voronoi diagram on an empty field |

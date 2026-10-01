@@ -1,4 +1,4 @@
-# 0006: ACRA 2026 evaluation rules (DEC-005 to DEC-022)
+# 0006: ACRA 2026 evaluation rules (DEC-005 to DEC-023)
 
 Date: 2026-10-01
 
@@ -26,6 +26,7 @@ evaluator.
 | DEC-019 | Failure rules after the initial plan: a replan taking over 100 ms of wall time stops that robot (`time_limit`); any robot without a route for 1000 ms of simulated time fails the episode (`no_valid_path`). The initial plan is exempt. PRM keeps a fixed cap of 5 resample attempts per call. | `slow_call_limit_ms`, `no_route_limit_ms` |
 | DEC-020 | The prediction horizon sweep uses 0 / 20 / 50 / 100 ms (event policy, 20 ms checks). The 0 ms point is the policy comparison's event @ 20 ms arm. | `RESULT_SETS["horizon-sweep"]` |
 | DEC-022 | All three planners share one escape step (`planners/reroute.py`, `escape_waypoint`): when the robot is inside one of the planner's own inflated obstacles, it steps straight out (`max(250 mm, overlap + 120 mm)`) instead of planning. Previously only Voronoi did this; PRM and the visibility graph refused to plan. Escape steps are counted as `escape_moves`, kept out of rebuild counts and rebuild latency. | `escape_moves`, `escapes_per_run` |
+| DEC-023 | Voronoi's per-tick safety checks (event gate, escape zone, direct-line and previous-route checks) use `voronoi_check_margin_mm` = 30 mm, the same margin PRM and the visibility graph already check at. The Voronoi roadmap keeps its own corridor clearance (DEC-014). Setting it to 0 restores the earlier behaviour. | `planner_variables.yaml`, `VoronoiWaypointManager(check_margin_mm=...)` |
 | DEC-021 | A collision-free completion rate, (S + B) / 200, is reported alongside the hierarchy as the one number comparable with success rates in other work. | `collision_free_completion_rate` |
 
 ## Why the limits have the values they do
