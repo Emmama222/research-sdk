@@ -154,12 +154,17 @@ SHORT_TITLES = {
 }
 
 
+PAPER = False  # set by --paper
+
+
 def _titled(fig, title: str, subtitle: str, name: str | None = None) -> float:
     """Finding-style title plus a plain-language reading line; returns the free top fraction.
 
     Positions are in inches from the top edge, so spacing is the same for every
     figure height. Long lines wrap to the figure width.
     """
+    if PAPER:  # --paper: the LaTeX caption carries the title and the finding
+        return 1 - 0.05 / fig.get_size_inches()[1]
     if name in SHORT_TITLES:  # short comparison title; the finding moves to the subtitle
         subtitle = f"{title}. {subtitle}"
         title = SHORT_TITLES[name]
@@ -947,7 +952,13 @@ def figure_no_route(policy, check500, out: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the ACRA 2026 paper figures.")
     parser.add_argument("root", type=Path, nargs="?", default=Path("results/acra2026-final"))
+    parser.add_argument(
+        "--paper", action="store_true",
+        help="omit in-figure titles and subtitles (captions live in LaTeX); writes to figures/paper/",
+    )
     args = parser.parse_args()
+    global PAPER
+    PAPER = args.paper
     root = args.root
     robots = _read(root / "one-shot-validation" / "robots.csv")
     policy = _read(root / "policy-comparison" / "summary.csv")
@@ -960,7 +971,7 @@ def main() -> int:
     ablation_calls = _read(support / "event-route-ablation" / "rebuild_calls.csv")
     check150 = _read(support / "horizon-150-check" / "summary.csv")
     check500 = _read(support / "no-route-500-check" / "summary.csv")
-    out = root / "figures"
+    out = root / "figures" / ("paper" if PAPER else "")
     print(f"Writing figures to {out}")
     figure_one_shot(robots, out)
     figure_policy_outcomes(policy, out)

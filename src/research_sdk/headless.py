@@ -46,6 +46,7 @@ from research_sdk.config import (
     planning_clearance_mm,
 )
 from research_sdk.exporters import CSVExporter, JSONExporter
+from research_sdk.machine_info import machine_info
 from research_sdk.planners import (
     PlannerAPI,
     PlannerInput,
@@ -1958,6 +1959,7 @@ def write_one_shot_results(
         "networkx Dijkstra call, map_ms is the rest of the planning call",
         "robot_calls": len(rows),
         **_code_revision(),
+        "machine": machine_info(),
         **(extra_manifest or {}),
     }
     manifest_path = folder / "manifest.json"
@@ -2087,6 +2089,7 @@ def write_results(
             "initial_plan": "exempt from the time limit; reported as one-shot timing",
         },
         **_code_revision(),
+        "machine": machine_info(),
         **(extra_manifest or {}),
     }
     manifest_path = folder / "manifest.json"
