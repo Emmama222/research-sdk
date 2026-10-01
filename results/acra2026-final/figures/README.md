@@ -19,7 +19,8 @@ the policy comparison's event @ 20 ms arm.
 | `policy_compute_vs_safety` | Policy Comparison | Replanning effort vs contact rate | x = replans per run (log), y = % of finished runs that touched something; colour = planner, square/circle = cycle/event, filled/hollow = 20/100 ms |
 | `policy_replan_latency_20ms` | Policy Comparison | Rebuild time: cycle vs event at 20 ms checks | Share of successful rebuilds finished within x ms; line at 100 ms = replan limit; counts in the corner |
 | `policy_replan_latency_100ms` | Policy Comparison | Same at 100 ms checks | As above |
-| `policy_route_lifetime` | Policy Comparison | Route lifetime: cycle vs event trigger | Average time a route is followed before replacement |
+| `policy_route_lifetime` | Policy Comparison | Route lifetime: event vs cycle for three planners | Event bars with cycle as a reference marker; average time a route is followed before replacement |
+| `horizon_route_lifetime` | Prediction Horizon Sweep | Route lifetime vs prediction horizon for three planners | Event @ 20 ms at each horizon, cycle @ 20 ms as a reference marker at 0 ms |
 | `horizon_outcomes` | Prediction Horizon Sweep | Run outcomes vs prediction horizon | Same bars as `policy_outcomes`, horizons 0 (none), 20, 50, 100 ms |
 | `horizon_trends` | Prediction Horizon Sweep | Safety and replanning vs horizon | 2×2: clean finishes, touched something, did not finish, replans per run |
 | `table_rebuild_latency` | Policy Comparison | Cycle vs event rebuild time for three planners | Table: rebuilds per run, median / 95th / 99th percentile / slowest rebuild, rebuilds over 100 ms per 10,000, Dijkstra share of rebuild time, robots stopped |

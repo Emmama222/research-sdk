@@ -207,8 +207,8 @@ else can be mixed in.
 
 ~~~powershell
 python -m research_sdk.headless --result-set one-shot-validation --output-dir results/acra2026-final/one-shot-validation
-python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
-python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
+python -m research_sdk.headless --result-set policy-comparison --workers 1 --slow-call-limit-ms 0 --output-dir results/acra2026-final/policy-comparison
+python -m research_sdk.headless --result-set horizon-sweep --workers 1 --slow-call-limit-ms 0 --output-dir results/acra2026-final/horizon-sweep
 python scripts/build_result_tables.py
 python scripts/plot_outcomes.py
 ~~~
@@ -267,6 +267,10 @@ contact is not recorded.
   `time_limit`. The rest of the team continues. The call's time includes the
   route check, the map or roadmap rebuild and every Dijkstra search in the
   call (for PRM, up to its 5 resampling attempts).
+  For the final ACRA 2026 sets this limit is turned off (`--slow-call-limit-ms 0`,
+  DEC-024): slow calls are still counted, but no robot is stopped, so the
+  results do not depend on the machine. Simulated time is paused during every
+  planner call either way.
 - **No-route limit:** any robot that goes 1000 ms of simulated time without a
   valid route (`--no-route-limit-ms`) fails and ends the episode, flagged
   `no_valid_path`.

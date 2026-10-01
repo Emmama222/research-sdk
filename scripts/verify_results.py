@@ -19,7 +19,8 @@ SETS = {"policy-comparison": 2400, "horizon-sweep": 1800, "supporting/event-rout
 KEYS = ["planner", "replan_policy", "replan_period_ms", "prediction_horizon_ms"]
 FIGS = ["oneshot_planning_time_and_route_length", "policy_outcomes", "policy_collision_free",
         "policy_compute_vs_safety", "policy_replan_latency_20ms", "policy_replan_latency_100ms",
-        "policy_route_lifetime", "horizon_outcomes", "horizon_trends", "ablation_event_route",
+        "policy_route_lifetime", "horizon_outcomes", "horizon_trends", "horizon_route_lifetime",
+        "ablation_event_route",
         "table_event_route", "table_rebuild_latency"]
 results: list[tuple[bool, str]] = []
 
@@ -54,8 +55,9 @@ for name in SETS:
         continue
     check(m.get("workers") == 1, f"{name}: single worker")
     rules = m.get("failure_rules", {})
-    check(rules.get("replan_time_limit_ms") == 100.0 and rules.get("no_route_limit_ms") == 1000.0,
-          f"{name}: failure rules 100 ms / 1000 ms")
+    # DEC-024: the 100 ms replan limit is measured but not enforced (None); 1 s no-route rule kept.
+    check(rules.get("replan_time_limit_ms") is None and rules.get("no_route_limit_ms") == 1000.0,
+          f"{name}: failure rules: replan time limit off (DEC-024), no-route 1000 ms")
 
 for name, expected in SETS.items():
     folder = ROOT / name

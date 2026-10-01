@@ -14,6 +14,7 @@ Main result sets
   policy_route_lifetime                    "
   horizon_outcomes                         Prediction Horizon Sweep
   horizon_trends                           "
+  horizon_route_lifetime                   "
 Supporting sets (under <root>/supporting/<set>/), drawn only when present
   ablation_event_route                     event vs event_route trigger (DEC-010)
   evidence_horizon_150                     why the sweep stops at 100 ms (DEC-020)
@@ -145,7 +146,8 @@ SHORT_TITLES = {
     "policy_compute_vs_safety": "Replanning effort vs contact rate, by planner and policy",
     "policy_replan_latency_20ms": "Rebuild time: cycle vs event trigger at 20 ms checks",
     "policy_replan_latency_100ms": "Rebuild time: cycle vs event trigger at 100 ms checks",
-    "policy_route_lifetime": "Route lifetime: cycle vs event trigger, by planner",
+    "policy_route_lifetime": "Route lifetime: event vs cycle for three planners",
+    "horizon_route_lifetime": "Route lifetime vs prediction horizon for three planners",
     "horizon_outcomes": "Run outcomes vs prediction horizon, by planner",
     "horizon_trends": "Safety and replanning vs prediction horizon, by planner",
     "ablation_event_route": "Run outcomes: event vs full-path recalculation, by planner",
@@ -471,41 +473,109 @@ def figure_latency(calls, policy, period: float, out: Path, extra_calls=None) ->
     _save(fig, out, f"policy_replan_latency_{period:g}ms")
 
 
+def _cycle_dot(ax, x: float, value: float, first: bool) -> None:
+    """Cycle reference marker drawn on an event bar position."""
+    ax.plot([x], [value], marker="D", markersize=5.2, markerfacecolor=SURFACE, markeredgecolor=INK,
+            markeredgewidth=1.1, linestyle="none", zorder=4,
+            label="Cycle (reference)" if first else None)
+    ax.text(x + 0.075, value, f"{value:.0f}", ha="left", va="center", fontsize=6.0, color=INK, zorder=4)
+
+
 def figure_routes(policy: pd.DataFrame | None, out: Path) -> None:
+    """Route lifetime: event bars with the cycle arm as a reference marker."""
     if policy is None:
         return
-    arms = [("cycle", 20.0), ("event", 20.0), ("cycle", 100.0), ("event", 100.0)]
+    periods = (20.0, 100.0)
     ratios = []
-    for p in PLANNERS:
-        c, e = _row(policy, p, "cycle", 20.0), _row(policy, p, "event", 20.0)
-        if c is not None and e is not None:
-            ratios.append(e["route_lifetime_ms_mean"] / c["route_lifetime_ms_mean"])
-    vc, ve = _row(policy, "voronoi", "cycle", 20.0), _row(policy, "voronoi", "event", 20.0)
-    title = (f"With event triggering a route is kept {min(ratios):.1f}–{max(ratios):.1f}× longer "
-             f"at 20 ms checks (Voronoi {vc['route_lifetime_ms_mean']:.0f} → "
-             f"{ve['route_lifetime_ms_mean']:.0f} ms)")
-    subtitle = "Average time a planned route is followed before it is replaced by a new one."
+    for t in periods:
+        for p in PLANNERS:
+            c, e = _row(policy, p, "cycle", t), _row(policy, p, "event", t)
+            if c is not None and e is not None:
+                ratios.append(e["route_lifetime_ms_mean"] / c["route_lifetime_ms_mean"])
+    if not ratios:
+        return
+    finding = (f"Event (ours) keeps a route {min(ratios):.1f}–{max(ratios):.1f}× longer than cycle at the same "
+               "check interval")
+    subtitle = ("Bars: event; \u25c7 markers: cycle on the same 200 scenarios. Lifetime = average time a "
+                "route is followed before a new one replaces it. Every policy first tests the straight line to "
+                "the target and keeps driving straight while it is clear, so only a detour (or a step out of an "
+                "obstacle zone) replaces a route; cycle routes therefore outlast one check.")
     fig, ax = plt.subplots(figsize=(6.2, 3.1))
-    width = 0.24
-    for i, planner in enumerate(PLANNERS):
-        for j, (pol, t) in enumerate(arms):
-            row = _row(policy, planner, pol, t)
-            if row is None:
-                continue
-            value = float(row["route_lifetime_ms_mean"])
+    width = 0.26
+    first_dot = True
+    for j, t in enumerate(periods):
+        for i, planner in enumerate(PLANNERS):
             x = j + (i - 1) * width
+            e, c = _row(policy, planner, "event", t), _row(policy, planner, "cycle", t)
+            if e is not None:
+                value = float(e["route_lifetime_ms_mean"])
+                ax.bar(x, value, width=width, color=PLANNER_COLOR[planner], edgecolor=SURFACE,
+                       linewidth=1.0, label=PLANNER_LABEL[planner] if j == 0 else None)
+                ax.text(x, value, f"{value:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK_2)
+            if c is not None:
+                _cycle_dot(ax, x, float(c["route_lifetime_ms_mean"]), first_dot)
+                first_dot = False
+    ax.set_xticks(range(len(periods)), [f"{t:g} ms checks" for t in periods])
+    ax.tick_params(axis="x", length=0)
+    ax.set_ylabel("Average route lifetime (ms)")
+    top = float(policy[policy.replan_policy.isin(["cycle", "event"])]["route_lifetime_ms_mean"].max())
+    ax.set_ylim(0, top * 1.15)
+    _clean(ax, grid_axis="y")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
+    free = _titled(fig, finding, subtitle, "policy_route_lifetime")
+    fig.tight_layout(rect=(0, 0, 1, free))
+    _save(fig, out, "policy_route_lifetime")
+
+
+def figure_horizon_routes(policy, sweep, out: Path) -> None:
+    """Route lifetime vs prediction horizon (event @ 20 ms), cycle @ 20 ms as reference at 0 ms."""
+    if policy is None or sweep is None:
+        return
+    rows = _horizon_rows(policy, sweep)
+    horizons = sorted(rows["prediction_horizon_ms"].unique())
+
+    def life(p, h):
+        sel = rows[(rows.planner == p) & (rows.prediction_horizon_ms == h)]
+        return float(sel.iloc[0]["route_lifetime_ms_mean"]) if len(sel) else float("nan")
+
+    first, last = horizons[0], horizons[-1]
+    change = ", ".join(f"{PLANNER_LABEL[p]} {life(p, first):.0f} → {life(p, last):.0f} ms" for p in PLANNERS)
+    shorter = all(life(p, last) < life(p, first) for p in PLANNERS)
+    finding = (f"Prediction shortens routes for every planner ({change}, {first:g} → {last:g} ms)" if shorter
+               else f"Route lifetime by horizon ({change}, {first:g} → {last:g} ms)")
+    cyc = {p: _row(policy, p, "cycle", 20.0) for p in PLANNERS}
+    keep = [life(p, last) / float(c["route_lifetime_ms_mean"]) for p, c in cyc.items() if c is not None]
+    if keep:
+        finding += (f"; even at {last:g} ms, event routes last {min(keep):.1f}–{max(keep):.1f}× as long as cycle "
+                    "routes without prediction")
+    subtitle = ("Projected obstacles block the route sooner, so it is replaced more often. Bars: event "
+                "(ours) at 20 ms checks; \u25c7 markers: cycle at 20 ms checks without prediction, for reference. "
+                "Horizon = how far ahead (ms) obstacles are projected; 0 = no prediction.")
+    fig, ax = plt.subplots(figsize=(6.2, 3.1))
+    width = 0.26
+    first_dot = True
+    for j, h in enumerate(horizons):
+        for i, planner in enumerate(PLANNERS):
+            x = j + (i - 1) * width
+            value = life(planner, h)
             ax.bar(x, value, width=width, color=PLANNER_COLOR[planner], edgecolor=SURFACE,
                    linewidth=1.0, label=PLANNER_LABEL[planner] if j == 0 else None)
             ax.text(x, value, f"{value:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK_2)
-    ax.set_xticks(range(len(arms)), [f"{p.capitalize()}\n{t:g} ms" for p, t in arms])
+            if h == 0.0:
+                c = _row(policy, planner, "cycle", 20.0)
+                if c is not None:
+                    _cycle_dot(ax, x, float(c["route_lifetime_ms_mean"]), first_dot)
+                    first_dot = False
+    ax.set_xticks(range(len(horizons)), [f"{h:g} ms" + ("\n(none)" if h == 0 else "") for h in horizons])
     ax.tick_params(axis="x", length=0)
+    ax.set_xlabel("Prediction horizon")
     ax.set_ylabel("Average route lifetime (ms)")
-    ax.set_ylim(0, float(policy["route_lifetime_ms_mean"].max()) * 1.15)
+    ax.set_ylim(0, float(rows["route_lifetime_ms_mean"].max()) * 1.15)
     _clean(ax, grid_axis="y")
     ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
-    free = _titled(fig, title, subtitle, "policy_route_lifetime")
+    free = _titled(fig, finding, subtitle, "horizon_route_lifetime")
     fig.tight_layout(rect=(0, 0, 1, free))
-    _save(fig, out, "policy_route_lifetime")
+    _save(fig, out, "horizon_route_lifetime")
 
 
 # --- Prediction Horizon Sweep -------------------------------------------------
@@ -732,8 +802,7 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
                  f"no route for 1 s (obstacles blocked every path): event {route['event']}, full-path "
                  f"{route['event_route']}, cycle {route['cycle']}")
     else:
-        fails = (f"Across all planners, failed runs from a rebuild over 100 ms (computing plus waiting for the CPU, as a "
-                 f"background process): event "
+        fails = (f"Across all planners, failed runs from a rebuild over 100 ms (wall-clock time): event "
                  f"{slow['event']}, full-path {slow['event_route']}, cycle {slow['cycle']}; failed runs because "
                  f"no route existed for 1 s (obstacles blocked every path): {route['event']}, "
                  f"{route['event_route']}, {route['cycle']}")
@@ -1013,6 +1082,7 @@ def main() -> int:
     figure_routes(policy, out)
     figure_horizon_outcomes(policy, sweep, out)
     figure_horizon(policy, sweep, out)
+    figure_horizon_routes(policy, sweep, out)
     figure_event_route(policy, ablation, out)
     table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out)
     table_rebuild_latency(calls, policy_runs, out)

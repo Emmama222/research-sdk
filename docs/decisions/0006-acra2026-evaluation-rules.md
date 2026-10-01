@@ -28,6 +28,7 @@ evaluator.
 | DEC-022 | All three planners share one escape step (`planners/reroute.py`, `escape_waypoint`): when the robot is inside one of the planner's own inflated obstacles, it steps straight out (`max(250 mm, overlap + 120 mm)`) instead of planning. Previously only Voronoi did this; PRM and the visibility graph refused to plan. Escape steps are counted as `escape_moves`, kept out of rebuild counts and rebuild latency. | `escape_moves`, `escapes_per_run` |
 | DEC-023 | Voronoi's per-tick safety checks (event gate, escape zone, direct-line and previous-route checks) use `voronoi_check_margin_mm` = 30 mm, the same margin PRM and the visibility graph already check at. The Voronoi roadmap keeps its own corridor clearance (DEC-014). Setting it to 0 restores the earlier behaviour. | `planner_variables.yaml`, `VoronoiWaypointManager(check_margin_mm=...)` |
 | DEC-021 | A collision-free completion rate, (S + B) / 200, is reported alongside the hierarchy as the one number comparable with success rates in other work. | `collision_free_completion_rate` |
+| DEC-024 | The 100 ms replan limit of DEC-019 is measured but no longer enforced in the main results: rebuilds over 100 ms are counted and reported, robots are not stopped. The 1 s no-route rule stays. Simulated time is paused during planner calls, so the main results are deterministic and machine-independent. The set run with the limit enforced is kept as supporting evidence. | `--slow-call-limit-ms 0`; `results/_archive-dec024-with-time-limit/` |
 
 ## Why the limits have the values they do
 
@@ -55,8 +56,16 @@ to repeat those checks on all 200 scenarios but were not run for the paper.
 - All final claims come from `results/acra2026-final/`, generated from the
   frozen bank `scenarios/acra2026-200`. Earlier batches are archived as
   historical evidence and are not used for final numbers.
-- Replan timing depends on hardware. Reported latencies and `time_limit`
-  stops apply to the machine the sets were run on. `manifest.json` does not
-  record the CPU or OS, so state them in the paper alongside the results.
+- Replan timing is wall-clock time and depends on the machine. Reported
+  latencies and `time_limit` stops apply to the machine recorded in each
+  `manifest.json` (CPU, core count, memory, OS, Python and package versions).
+- The simulation itself is deterministic. The final policy, horizon and
+  full-path sets were run twice at the same revision; every run that no
+  `time_limit` stop touched in either batch is identical in both (4,891 of
+  4,891: same outcome, same rebuild count). Stopped runs differ between the
+  two batches, so the stops are scheduling noise, not a property of a
+  scenario. The chance of a single rebuild exceeding 100 ms is similar for
+  event and cycle triggering; cycle triggering makes about ten times as many
+  rebuilds and is stopped correspondingly more often.
 - Unyielding patrol obstacles can cause contacts no policy can prevent. This
   is stated as a limitation, not removed from the outcome.
