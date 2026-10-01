@@ -57,7 +57,7 @@ def _planner(row: dict[str, str]) -> str:
 def one_shot_table(rows: list[dict[str, str]]) -> tuple[list[str], list[list[str]]]:
     header = [
         "Planner", "Routes (robots)", "Scenarios with all routes", "Map-requiring requests",
-        "Median ms (map-requiring)", "P95 ms (map-requiring)", "Path excess (map-requiring, median)",
+        "Median ms (map-requiring)", "P95 ms (map-requiring)", "Route excess over straight line (map-requiring, median)",
         "Map ms (mean, all)", "Dijkstra ms (mean, all)", "Total ms (max)",
         "Turning rad/m", "Turns >90° per route",
     ]
@@ -75,15 +75,15 @@ def one_shot_table(rows: list[dict[str, str]]) -> tuple[list[str], list[list[str
 
 
 DYNAMIC_HEADER = [
-    "Collision-free finishes /200",
-    "Completed", "Strict /C", "Buffer-only /C", "Physical /C", "RR contacts /F",
-    "RO contacts /F", "Contacts /F", "Episodes failed (no route)",
-    "Robots stopped (replan >100 ms)",
-    "Initial retries /run", "Initial wait ms /run", "Replans /run", "Escape moves /run",
-    "Failed replans /run",
-    "Failed replan share", "Blocked time %", "Avg route alive ms", "Longest route alive ms",
-    "Min replan ms (successful)", "Mean replan ms (successful)", "P95 replan ms (successful)",
-    "Max replan ms (successful)",
+    "Contact-free completions /200",
+    "Completed", "Strict /C", "Buffer-only /C", "Contact /C", "RR contacts /F",
+    "RO contacts /F", "Contacts /F", "Incomplete: no route for 1 s",
+    "Robots stopped (rebuild >100 ms)",
+    "Initial retries /run", "Initial wait ms /run", "Rebuilds /run", "Escape moves /run",
+    "Failed rebuild attempts /run",
+    "Failed rebuild attempt share", "Time without a route %", "Route lifetime ms (mean)", "Route lifetime ms (max)",
+    "Rebuild ms (min)", "Rebuild ms (mean)", "Rebuild ms (P95)",
+    "Rebuild ms (max)",
 ]
 
 

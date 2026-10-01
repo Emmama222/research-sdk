@@ -28,7 +28,6 @@ evaluator.
 | DEC-022 | All three planners share one escape step (`planners/reroute.py`, `escape_waypoint`): when the robot is inside one of the planner's own inflated obstacles, it steps straight out (`max(250 mm, overlap + 120 mm)`) instead of planning. Previously only Voronoi did this; PRM and the visibility graph refused to plan. Escape steps are counted as `escape_moves`, kept out of rebuild counts and rebuild latency. | `escape_moves`, `escapes_per_run` |
 | DEC-023 | Voronoi's per-tick safety checks (event gate, escape zone, direct-line and previous-route checks) use `voronoi_check_margin_mm` = 30 mm, the same margin PRM and the visibility graph already check at. The Voronoi roadmap keeps its own corridor clearance (DEC-014). Setting it to 0 restores the earlier behaviour. | `planner_variables.yaml`, `VoronoiWaypointManager(check_margin_mm=...)` |
 | DEC-021 | A collision-free completion rate, (S + B) / 200, is reported alongside the hierarchy as the one number comparable with success rates in other work. | `collision_free_completion_rate` |
-| DEC-024 | The 100 ms replan limit of DEC-019 is measured but no longer enforced in the main results: rebuilds over 100 ms are counted and reported, robots are not stopped. The 1 s no-route rule stays. Simulated time is paused during planner calls, so the main results are deterministic and machine-independent. The set run with the limit enforced is kept as supporting evidence. | `--slow-call-limit-ms 0`; `results/_archive-dec024-with-time-limit/` |
 
 ## Why the limits have the values they do
 

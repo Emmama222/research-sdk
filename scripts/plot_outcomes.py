@@ -15,6 +15,9 @@ Main result sets
   horizon_outcomes                         Prediction Horizon Sweep
   horizon_trends                           "
   horizon_route_lifetime                   "
+  table_route_quality                      Planner differences (policy + horizon sets)
+  table_reliability                        "
+  planner_difficulty                       "
 Supporting sets (under <root>/supporting/<set>/), drawn only when present
   ablation_event_route                     event vs event_route trigger (DEC-010)
   evidence_horizon_150                     why the sweep stops at 100 ms (DEC-020)
@@ -60,10 +63,10 @@ OUTCOME_COLORS = {
     "incomplete": "#c3c2b7",
 }
 OUTCOME_LABELS = {
-    "strict": "Finished, never closer than 30 mm",
-    "buffer_only": "Finished, came within 30 mm",
-    "physical": "Finished, but touched something",
-    "incomplete": "Did not finish",
+    "strict": "Strict: never inside the 30 mm safety buffer",
+    "buffer_only": "Buffer-only: entered the safety buffer, no contact",
+    "physical": "Contact: touched a robot or an obstacle",
+    "incomplete": "Incomplete",
 }
 PLANNERS = ("voronoi", "prm", "visibility")
 PLANNER_LABEL = {"voronoi": "Voronoi", "prm": "PRM", "visibility": "Visibility Graph"}
@@ -142,12 +145,15 @@ def _clean(ax, *, grid_axis: str | None = "x") -> None:
 SHORT_TITLES = {
     "oneshot_planning_time_and_route_length": "Planning time vs route length, by planner",
     "policy_outcomes": "Run outcomes: cycle vs event trigger, by planner",
-    "policy_collision_free": "Collision-free finishes: cycle vs event trigger, by planner",
+    "policy_collision_free": "Contact-free completions: cycle vs event for three planners",
     "policy_compute_vs_safety": "Replanning effort vs contact rate, by planner and policy",
     "policy_replan_latency_20ms": "Rebuild time: cycle vs event trigger at 20 ms checks",
     "policy_replan_latency_100ms": "Rebuild time: cycle vs event trigger at 100 ms checks",
     "policy_route_lifetime": "Route lifetime: event vs cycle for three planners",
     "horizon_route_lifetime": "Route lifetime vs prediction horizon for three planners",
+    "table_route_quality": "Route quality: Voronoi vs PRM vs Visibility Graph",
+    "table_reliability": "Rebuild reliability: Voronoi vs PRM vs Visibility Graph",
+    "planner_difficulty": "Safety and planning time vs crowding for three planners",
     "horizon_outcomes": "Run outcomes vs prediction horizon, by planner",
     "horizon_trends": "Safety and replanning vs prediction horizon, by planner",
     "ablation_event_route": "Run outcomes: event vs full-path recalculation, by planner",
@@ -334,11 +340,11 @@ def figure_policy_outcomes(policy: pd.DataFrame | None, out: Path) -> None:
         for p, t in pairs
     )
     v_c, v_e = _row(policy, "visibility", "cycle", 20.0), _row(policy, "visibility", "event", 20.0)
-    lead = ("Event triggering finishes as many runs as cycling or more"
+    lead = ("Event (ours) completes as many runs as cycle or more"
             if event_ok else "Run outcomes by planner and policy")
     lo, hi = int(policy["completed"].min()), int(policy["completed"].max())
     if hi - lo <= 5:
-        title = (f"{lead} (every arm finishes {lo}–{hi} of 200) and touches obstacles about as often, "
+        title = (f"{lead} (every arm completes {lo}–{hi} of 200) with about as many contact runs, "
                  f"with far fewer rebuilds")
     else:
         title = (f"{lead} (Visibility Graph at 20 ms: {int(v_c['completed'])} vs "
@@ -354,7 +360,7 @@ def figure_collision_free(policy: pd.DataFrame | None, out: Path) -> None:
         return
     arms = [("cycle", 20.0), ("event", 20.0), ("cycle", 100.0), ("event", 100.0)]
     best = policy.loc[policy["collision_free_completion_rate"].idxmax()]
-    title = (f"Collision-free finishes out of 200: best is {PLANNER_LABEL[best['planner']]} "
+    title = (f"Contact-free completions out of 200: best is {PLANNER_LABEL[best['planner']]} "
              f"{_arm_label(best['replan_policy'], best['replan_period_ms'])} at "
              f"{_pct(best['collision_free_completion_rate'])}")
     subtitle = ("A run counts if every robot reached its goal without touching anything "
@@ -373,7 +379,7 @@ def figure_collision_free(policy: pd.DataFrame | None, out: Path) -> None:
             ax.text(x, value, f"{value:.0f}", ha="center", va="bottom", fontsize=6.5, color=INK_2)
     ax.set_xticks(range(len(arms)), [f"{p.capitalize()}\n{t:g} ms" for p, t in arms])
     ax.tick_params(axis="x", length=0)
-    ax.set_ylabel("Collision-free finishes (% of 200 runs)")
+    ax.set_ylabel("Contact-free completions (% of 200 runs)")
     ax.set_ylim(0, 100)
     _clean(ax, grid_axis="y")
     ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0))
@@ -391,11 +397,11 @@ def figure_tradeoff(policy: pd.DataFrame | None, out: Path) -> None:
         if c is not None and e is not None and e["replans_per_run"] > 0:
             ratios.append(c["replans_per_run"] / e["replans_per_run"])
             deltas.append(100 * (e["physical_rate"] - c["physical_rate"]))
-    title = (f"Rebuilding every check costs {min(ratios):.0f}–{max(ratios):.0f}× more replans "
+    title = (f"Rebuilding every check costs {min(ratios):.0f}–{max(ratios):.0f}× more rebuilds "
              f"than event triggering, yet contact differs by only "
              f"{min(deltas):+.0f} to {max(deltas):+.0f} points (20 ms checks)")
     subtitle = ("Each marker is one planner with one policy. Further left = less computing; "
-                "lower = fewer runs that touched something.")
+                "lower = fewer completions with contact.")
     fig, ax = plt.subplots(figsize=(5.8, 3.4))
     markers = {"cycle": "s", "event": "o"}
     for _, row in policy.iterrows():
@@ -407,8 +413,8 @@ def figure_tradeoff(policy: pd.DataFrame | None, out: Path) -> None:
                    zorder=3)
     ax.set_xscale("log")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:g}"))
-    ax.set_xlabel("Successful replans per run (log scale)")
-    ax.set_ylabel("Runs that touched something (% of finished runs)")
+    ax.set_xlabel("Rebuilds per run (log scale)")
+    ax.set_ylabel("Completions with contact (% of completed runs)")
     _clean(ax, grid_axis="both")
     key = [
         Line2D([], [], marker="s", ls="", mfc=INK_2, mec=INK_2, label="Cycle @ 20 ms"),
@@ -597,7 +603,7 @@ def figure_horizon_outcomes(policy, sweep, out: Path) -> None:
         sel = rows[(rows.planner == p) & (rows.prediction_horizon_ms == h)]
         return int(sel.iloc[0][col]) if len(sel) else 0
 
-    title = (f"Looking further ahead helps Voronoi (clean finishes {at('voronoi', first, 'strict')} "
+    title = (f"Looking further ahead helps Voronoi (strict completions {at('voronoi', first, 'strict')} "
              f"→ {at('voronoi', last, 'strict')}) but not PRM or Visibility Graph "
              f"(unfinished {at('prm', first, 'incomplete')} → {at('prm', last, 'incomplete')} and "
              f"{at('visibility', first, 'incomplete')} → {at('visibility', last, 'incomplete')})")
@@ -608,10 +614,10 @@ def figure_horizon_outcomes(policy, sweep, out: Path) -> None:
 
 def _trend_panels(axes, rows) -> None:
     panels = [
-        ("strict_rate", "Clean finishes (% of finished runs)", 100.0),
-        ("physical_rate", "Runs that touched something (% of finished runs)", 100.0),
-        ("incomplete_rate", "Runs that did not finish (% of 200)", 100.0),
-        ("replans_per_run", "Successful replans per run", 1.0),
+        ("strict_rate", "Strict completions (% of completed runs)", 100.0),
+        ("physical_rate", "Completions with contact (% of completed runs)", 100.0),
+        ("incomplete_rate", "Incomplete runs (% of 200)", 100.0),
+        ("replans_per_run", "Rebuilds per run", 1.0),
     ]
     horizons = sorted(rows["prediction_horizon_ms"].unique())
     for ax, (column, title, scale) in zip(axes.flat, panels):
@@ -650,12 +656,12 @@ def figure_horizon(policy, sweep, out: Path) -> None:
         f"{PLANNER_LABEL[p]} {val(p, first, 'strict_rate'):.0f}% → {val(p, last, 'strict_rate'):.0f}%"
         for p in PLANNERS)
     if all(g > 0 for g in gains.values()):
-        title = (f"Prediction raises clean finishes for every planner ({clean}, {first:g} → {last:g} ms) "
-                 f"at the cost of more replans for Voronoi "
+        title = (f"Prediction raises strict completions for every planner ({clean}, {first:g} → {last:g} ms) "
+                 f"at the cost of more rebuilds for Voronoi "
                  f"({val('voronoi', first, 'replans_per_run', 1):.0f} → "
                  f"{val('voronoi', last, 'replans_per_run', 1):.0f} per run)")
     else:
-        title = (f"Prediction changes clean finishes by planner ({clean}, {first:g} → {last:g} ms)")
+        title = (f"Prediction changes strict completions by planner ({clean}, {first:g} → {last:g} ms)")
     subtitle = ("Horizon = how far ahead (ms) obstacles are projected; 0 = no prediction. "
                 "Event trigger, 20 ms checks, 200 scenarios per point.")
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 6.0))
@@ -687,8 +693,8 @@ def figure_event_route(policy, ablation, out: Path) -> None:
     lost = ", ".join(f"{PLANNER_LABEL[p]} {d:+d}" for p, d, _, _ in diffs)
     clean = ", ".join(f"{s:+d}" for _, _, s, _ in diffs)
     title = (f"Recalculating whenever any later segment is blocked (full-path) costs "
-             f"{min(x for *_, x in diffs):.1f}–{max(x for *_, x in diffs):.1f}× the replans at 20 ms "
-             f"and changes finishes by {lost}, with clean finishes {clean}: "
+             f"{min(x for *_, x in diffs):.1f}–{max(x for *_, x in diffs):.1f}× the rebuilds at 20 ms "
+             f"and changes completions by {lost}, with strict completions {clean}: "
              f"more work, no safety gain")
     subtitle = ("Event rebuilds when the segment to the next waypoint is blocked; full-path "
                 "also rebuilds when any later segment is blocked, the rule Costa and Tonidandel (2024) describe "
@@ -737,7 +743,7 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
     if "outcome" in runs:
         runs = runs[runs.outcome != "X"]
     runs = runs.assign(
-        compute=runs.rebuild_ms_total.fillna(0) + runs.event_check_ms_total.fillna(0),
+        compute=runs.planning_time_ms_total - runs.planning_time_ms_initial,
         dnf_route=(runs.outcome == "I") & (runs.episode_end_reason.fillna("") == "no_valid_path"),
     )
     runs = runs.assign(dnf_slow=(runs.outcome == "I") & ~runs.dnf_route)
@@ -762,15 +768,15 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
     t = t.reset_index()
     # (column, header, format, higher_is_better)
     cols = [
-        ("finished", "Runs\nfinished\n(of 200)", "{:.0f}", True),
-        ("cf", "Finished\nwithout contact\n(of 200)", "{:.0f}", True),
+        ("finished", "Completed\nruns\n(of 200)", "{:.0f}", True),
+        ("cf", "Contact-free\ncompletions\n(of 200)", "{:.0f}", True),
         ("rebuilds", "Rebuilds\nper run", "{:.1f}", False),
         ("later", "Rebuilds from\nblocked later\nsegment (/run)", "{:.1f}", False),
-        ("compute", "Planning\ntime per\nrun (ms)", "{:.0f}", False),
-        ("median", "Time per\nrebuild,\nmedian (ms)", "{:.1f}", False),
-        ("dnf_slow", "Failed runs:\nrebuild over\n100 ms", "{:.0f}", False),
-        ("dnf_route", "Failed runs:\nno route\nfor 1 s", "{:.0f}", False),
-        ("life", "Time a\nroute is\nkept (ms)", "{:.0f}", True),
+        ("compute", "Replanning\ntime per\nrun (ms)", "{:.0f}", False),
+        ("median", "Rebuild\ntime,\nmedian (ms)", "{:.1f}", False),
+        ("dnf_slow", "Incomplete:\nrebuild over\n100 ms", "{:.0f}", False),
+        ("dnf_route", "Incomplete:\nno route\nfor 1 s", "{:.0f}", False),
+        ("life", "Route\nlifetime\n(ms)", "{:.0f}", True),
     ]
     arms = (("event", "Event (ours)"), ("event_route", "Full-path"), ("cycle", "Cycle"))
     blocks = []
@@ -795,8 +801,8 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
     vis = [get("visibility", 20.0, pol, "rebuilds") for pol in ("event", "event_route", "cycle")]
     fin_lo, fin_hi = int(t.finished.min()), int(t.finished.max())
     lead = (f"Rebuilding more often costs more planning time without finishing more runs (every arm "
-            f"finishes {fin_lo}–{fin_hi} of 200)" if fin_hi - fin_lo <= 5 else
-            "Rebuilding more often costs more and finishes fewer runs")
+            f"completes {fin_lo}–{fin_hi} of 200)" if fin_hi - fin_lo <= 5 else
+            "Rebuilding more often costs more and completes fewer runs")
     if sum(slow.values()) == 0:
         fails = (f"No rebuild took over 100 ms, so no run failed on computing time; the runs that failed had "
                  f"no route for 1 s (obstacles blocked every path): event {route['event']}, full-path "
@@ -1049,6 +1055,220 @@ def figure_no_route(policy, check500, out: Path) -> None:
                     "evidence_no_route_limit")
 
 
+# --- Planner differences --------------------------------------------------------
+
+PLANNER_ARMS = [
+    ("event", 20.0, 0.0, "Event (ours) @ 20 ms"),
+    ("event", 20.0, 50.0, "Event (ours) @ 20 ms, 50 ms horizon"),
+    ("cycle", 20.0, 0.0, "Cycle @ 20 ms"),
+]
+
+
+def _arm_runs(runs: pd.DataFrame, pol: str, period: float, horizon: float) -> pd.DataFrame:
+    return runs[(runs.replan_policy == pol) & (runs.replan_period_ms == period)
+                & (runs.prediction_horizon_ms == horizon)]
+
+
+def _planner_table(groups, cols, title: str, subtitle: str, name: str, out: Path) -> None:
+    """Rows = planners within each arm; best/worst marked across the three planners."""
+    row_h, head_h, gap = 0.24, 0.62, 0.25
+    n_rows = sum(len(members) for _, members in groups)
+    total_h = head_h + n_rows * row_h + gap * len(groups)
+    fig_h = 1.3 + total_h
+    fig = plt.figure(figsize=(8.0, fig_h))
+    free = _titled(fig, title, subtitle, name)
+    ax = fig.add_axes((0.01, max(free - total_h / fig_h, 0.0), 0.98, min(total_h / fig_h, free)))
+    ax.set_axis_off()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(total_h, 0)
+    x0, width = 0.27, 0.73
+    col_w = width / len(cols)
+    x_cols = [x0 + i * col_w for i in range(len(cols))]
+    for (_, head, _, _, _), x in zip(cols, x_cols):
+        ax.text(x + col_w - 0.02, head_h - 0.06, head, ha="right", va="bottom", fontsize=6.4,
+                color=INK_2, linespacing=1.15)
+    ax.plot([0, 1], [head_h, head_h], color=AXIS, lw=0.8)
+    y = head_h
+    for gi, (label, members) in enumerate(groups):
+        if gi:
+            ax.plot([0.012, 1], [y, y], color=GRID, lw=0.5)
+        y += gap
+        ax.text(0.0, y - 0.05, label, ha="left", va="bottom", fontsize=7.6, fontweight="bold", color=INK)
+        marks = {}
+        for key, _, _, higher, rel in cols:
+            vals = [r.get(key) for _, r in members]
+            b, w = _best_worst(vals, higher, lambda lo, hi, rel=rel: rel * max(abs(lo), abs(hi), 1e-9))
+            for i in range(len(members)):
+                marks[(i, key)] = "best" if i in b else "worst" if i in w else None
+        for i, (planner, r) in enumerate(members):
+            ax.text(0.012, y + row_h / 2, PLANNER_LABEL[planner], ha="left", va="center", fontsize=6.9,
+                    color=INK)
+            for (key, _, fmt, _, _), x in zip(cols, x_cols):
+                kind = marks.get((i, key))
+                if kind:
+                    _mark_cell(ax, x, y, col_w, row_h, kind)
+                value = r.get(key)
+                text = "–" if value is None or pd.isna(value) else fmt.format(value)
+                ax.text(x + col_w - 0.02, y + row_h / 2, text, ha="right", va="center", fontsize=6.9,
+                        color=INK, fontweight="bold" if kind == "best" else "normal")
+            y += row_h
+    _save(fig, out, name)
+
+
+def table_route_quality(runs: pd.DataFrame | None, robots: pd.DataFrame | None, out: Path) -> None:
+    """Route quality per planner: time to goal, distance, smoothness, closest approach."""
+    if runs is None:
+        return
+    groups = []
+    for pol, period, horizon, label in PLANNER_ARMS:
+        arm = _arm_runs(runs, pol, period, horizon)
+        members = []
+        for planner in PLANNERS:
+            d = arm[(arm.planner == planner) & (arm.outcome != "I")]
+            if d.empty:
+                continue
+            members.append((planner, {
+                "ttg": d.time_to_goal_ms.median() / 1000.0,
+                "dist": d.travelled_distance_mm.sum() / d.straight_line_mm.sum(),
+                "heading": d.heading_change_rad_per_m.mean(),
+                "sharp": d.sharp_turns.mean(),
+                "clear": d.minimum_obstacle_clearance_mm.median(),
+            }))
+        if members:
+            groups.append((label, members))
+    if not groups:
+        return
+    cols = [
+        ("ttg", "Time to goal,\nmedian (s)", "{:.2f}", False, 0.03),
+        ("dist", "Distance driven /\nstraight line", "{:.2f}", False, 0.02),
+        ("heading", "Heading change\n(rad per m)", "{:.2f}", False, 0.1),
+        ("sharp", "Sharp turns\nper run", "{:.1f}", False, 0.1),
+        ("clear", "Closest approach to\nan obstacle,\nmedian (mm)", "{:.0f}", True, 0.1),
+    ]
+    ev = dict(groups[0][1])
+    fastest = min(ev, key=lambda k: ev[k]["ttg"])
+    slowest = max(ev, key=lambda k: ev[k]["ttg"])
+    excess = ""
+    if robots is not None:
+        mr = robots[(robots.search_ms > 0) & robots.route_available.astype(bool)]
+        med = mr.groupby("planner").path_excess.median()
+        excess = (" One-shot routes are longer than the straight line by a median of "
+                  + ", ".join(f"{PLANNER_LABEL[k]} {100 * med[k]:.0f} %" for k in PLANNERS if k in med) + ".")
+    finding = (f"{PLANNER_LABEL[fastest]} reaches the goal fastest ({ev[fastest]['ttg']:.2f} s) and "
+               f"{PLANNER_LABEL[slowest]} slowest ({ev[slowest]['ttg']:.2f} s) at event @ 20 ms")
+    subtitle = (f"{excess.strip()} Completed runs only, same 200 scenarios per arm. Heading change = total turning "
+                "per metre driven; sharp turn = a change of direction over 90°. Closest approach = smallest "
+                "gap between a robot's edge and an obstacle's surface in a run. In each group, ▲ blue (bold) marks the "
+                "best planner and ▼ orange the worst; marked only when they differ by the stated margin "
+                "(3 % for time, 2 % for distance, 10 % otherwise).")
+    _planner_table(groups, cols, finding, subtitle, "table_route_quality", out)
+
+
+def table_reliability(runs: pd.DataFrame | None, out: Path) -> None:
+    """Rebuild reliability per planner: failed attempts, escape moves, planning time."""
+    if runs is None:
+        return
+    groups = []
+    for pol, period, horizon, label in PLANNER_ARMS:
+        arm = _arm_runs(runs, pol, period, horizon)
+        members = []
+        for planner in PLANNERS:
+            d = arm[arm.planner == planner]
+            if d.empty:
+                continue
+            ok, failed = d.successful_rebuilds.sum(), d.replan_failures.sum()
+            members.append((planner, {
+                "attempts": (ok + failed) / len(d),
+                "fail": 100.0 * failed / max(ok + failed, 1),
+                "escape": d.escape_moves.mean(),
+                "plan": (d.planning_time_ms_total - d.planning_time_ms_initial).mean(),
+                "noroute": int((d.episode_end_reason == "no_valid_path").sum()),
+            }))
+        if members:
+            groups.append((label, members))
+    if not groups:
+        return
+    cols = [
+        ("attempts", "Rebuild attempts\nper run", "{:.1f}", False, 0.1),
+        ("fail", "Failed rebuild\nattempts (%)", "{:.0f}", False, 0.2),
+        ("escape", "Escape moves\nper run", "{:.1f}", False, 0.1),
+        ("plan", "Replanning time\nper run (ms)", "{:.0f}", False, 0.1),
+        ("noroute", "Incomplete:\nno route for 1 s", "{:.0f}", False, 0.0),
+    ]
+    tot = runs.assign(replan=runs.planning_time_ms_total - runs.planning_time_ms_initial).groupby("planner").agg(
+        plan=("replan", "sum"), failed=("replan_failures", "sum"), n=("scenario", "size"))
+    totals = "; ".join(f"{PLANNER_LABEL[k]} {tot.loc[k, 'plan'] / 1000:.0f} s, {tot.loc[k, 'failed']:,.0f} failed"
+                       for k in PLANNERS if k in tot.index)
+    ev = dict(groups[0][1])
+    finding = ("Voronoi's rebuilds almost always find a route" if min(ev, key=lambda k: ev[k]["fail"]) == "voronoi"
+               else "Rebuild reliability differs by planner")
+    finding += (f": {ev['voronoi']['fail']:.0f} % of attempts fail at event @ 20 ms, against "
+                f"{ev['prm']['fail']:.0f} % for PRM and {ev['visibility']['fail']:.0f} % for Visibility Graph"
+                if all(k in ev for k in ("voronoi", "prm", "visibility")) else "")
+    subtitle = (f"Total over all {int(tot.n.iloc[0]):,} moving-obstacle runs per planner (policy comparison and "
+                f"horizon sweep): replanning time and failed rebuild attempts, {totals}. A failed attempt leaves the robot "
+                "on its previous route; an escape move steps a robot out of an obstacle zone and is not a "
+                "rebuild. In each group, ▲ blue (bold) marks the best planner and ▼ orange the worst.")
+    _planner_table(groups, cols, finding, subtitle, "table_reliability", out)
+
+
+def figure_difficulty(runs: pd.DataFrame | None, robots: pd.DataFrame | None, out: Path) -> None:
+    """Contact-free completions and replanning time vs robots whose straight line is blocked at the start."""
+    if runs is None or robots is None:
+        return
+    blocked = robots[robots.search_ms > 0].groupby(["scenario", "robot"]).planner.nunique()
+    per_scen = (blocked == robots.planner.nunique()).groupby("scenario").sum()
+    levels = ["0", "1", "2", "3+"]
+
+    def level(s):
+        n = int(per_scen.get(s, 0))
+        return levels[min(n, 3)]
+
+    d = runs[(runs.replan_period_ms == 20.0) & (runs.prediction_horizon_ms == 0.0)].copy()
+    d["level"] = d.scenario.map(level)
+    counts = d.drop_duplicates("scenario").level.value_counts()
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 3.0))
+    styles = {"event": ("-", "Event (ours)"), "cycle": ("--", "Cycle")}
+    vis_drop = {}
+    for pol, (ls, _) in styles.items():
+        for planner in PLANNERS:
+            sel = d[(d.replan_policy == pol) & (d.planner == planner)]
+            g = sel.groupby("level")
+            cf = g.outcome.apply(lambda o: 100.0 * o.isin(["S", "B"]).mean()).reindex(levels)
+            pt = (g.planning_time_ms_total.mean() - g.planning_time_ms_initial.mean()).reindex(levels)
+            xs = range(len(levels))
+            axes[0].plot(xs, cf.values, ls, color=PLANNER_COLOR[planner], marker="o", markersize=3.5, lw=1.6)
+            axes[1].plot(xs, pt.values, ls, color=PLANNER_COLOR[planner], marker="o", markersize=3.5, lw=1.6)
+            if planner == "visibility":
+                vis_drop[pol] = (cf.iloc[0], cf.iloc[-1])
+    labels = [f"{lv}\n(n={int(counts.get(lv, 0))})" for lv in levels]
+    for ax, ylab in zip(axes, ("Contact-free completions (%)", "Replanning time per run (ms)")):
+        ax.set_xticks(range(len(levels)), labels)
+        ax.set_xlabel("Robots whose straight line is blocked at the start")
+        ax.set_ylabel(ylab)
+        _clean(ax, grid_axis="y")
+    axes[0].set_ylim(0, 100)
+    axes[1].set_ylim(0, None)
+    from matplotlib.lines import Line2D
+    handles = [Line2D([], [], color=PLANNER_COLOR[p], lw=2) for p in PLANNERS]
+    handles += [Line2D([], [], color=INK_2, ls=ls, lw=1.4) for ls, _ in styles.values()]
+    names = [PLANNER_LABEL[p] for p in PLANNERS] + [f"{lab} @ 20 ms" for _, lab in styles.values()]
+    fig.legend(handles, names, loc="lower center", ncol=5, bbox_to_anchor=(0.5, 0.0), fontsize=6.8)
+    finding = "Planner gaps grow with crowding"
+    if vis_drop:
+        e0, e3 = vis_drop.get("event", (float("nan"),) * 2)
+        c0, c3 = vis_drop.get("cycle", (float("nan"),) * 2)
+        finding = (f"Visibility Graph loses the most as more robots start blocked (contact-free {e0:.0f} % → "
+                   f"{e3:.0f} % with event, {c0:.0f} % → {c3:.0f} % with cycle), while Voronoi and PRM stay "
+                   "roughly level")
+    subtitle = ("Scenarios grouped by how many robots need a detour at the start (straight line blocked for "
+                "all three planners); n = scenarios per group. Solid lines: event (ours); dashed: cycle; "
+                "20 ms checks, no prediction.")
+    free = _titled(fig, finding, subtitle, "planner_difficulty")
+    fig.tight_layout(rect=(0, 0.1, 1, free))
+    _save(fig, out, "planner_difficulty")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build the ACRA 2026 paper figures.")
     parser.add_argument("root", type=Path, nargs="?", default=Path("results/acra2026-final"))
@@ -1067,6 +1287,9 @@ def main() -> int:
     support = root / "supporting"
     ablation = _read(support / "event-route-ablation" / "summary.csv")
     policy_runs = _read(root / "policy-comparison" / "runs.csv")
+    sweep_runs = _read(root / "horizon-sweep" / "runs.csv")
+    all_runs = (pd.concat([r for r in (policy_runs, sweep_runs) if r is not None], ignore_index=True)
+                if policy_runs is not None or sweep_runs is not None else None)
     ablation_runs = _read(support / "event-route-ablation" / "runs.csv")
     ablation_calls = _read(support / "event-route-ablation" / "rebuild_calls.csv")
     check150 = _read(support / "horizon-150-check" / "summary.csv")
@@ -1086,6 +1309,9 @@ def main() -> int:
     figure_event_route(policy, ablation, out)
     table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out)
     table_rebuild_latency(calls, policy_runs, out)
+    table_route_quality(all_runs, robots, out)
+    table_reliability(all_runs, out)
+    figure_difficulty(policy_runs, robots, out)
     figure_horizon_150(policy, sweep, check150, out)
     figure_no_route(policy, check500, out)
     return 0
