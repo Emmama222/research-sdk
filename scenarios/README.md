@@ -70,3 +70,12 @@ python scripts/report_batch.py --scenario-only `
   --scenario-dir scenarios/acra2026-200 `
   --scenario-output scenario_png
 ```
+
+The PNGs in `scenario_png/acra2026-200/` were rendered with the dependency-light
+renderer, which also writes a header on each image with the scenario name and the
+counts of robots (start → goal), moving obstacles and static obstacles, plus the
+patrol speed range:
+
+```powershell
+python scripts/render_scenario_pngs_pillow.py
+```

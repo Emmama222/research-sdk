@@ -119,6 +119,27 @@ Both planners are also selectable from the "Active planner" dropdown in the
 UI sandbox (`research-sdk-ui`), via the `PRMPlanner`/`VisibilityGraphPlanner`
 adapter classes described above.
 
+## Shared escape step (all planners, DEC-022)
+
+`planners/reroute.py` provides `escape_waypoint(start, target, zones)`. When the
+robot's own position lies inside one of a planner's inflated obstacles, the
+planner returns a single escape waypoint instead of planning: the robot is pushed
+away from every containing obstacle (overlap-weighted), by
+`max(voronoi_min_escape_step_mm, overlap + voronoi_escape_margin_mm)` (250 mm and
+120 mm in `planner_variables.yaml`), clamped to the field, then continues to the
+goal. Each planner passes its own zones, i.e. exactly where it would otherwise
+refuse to start: Voronoi uses obstacle radius + robot radius, PRM and the
+visibility graph add their planning clearance.
+
+The Voronoi planner always had this step; since 1 Oct 2026 the
+`PRMPlanner`/`VisibilityGraphPlanner` adapters call the same function before the
+expensive plan (gated and ungated), so a planner comparison measures the roadmaps,
+not which planner can step out of an obstacle. The module-level `plan()` functions
+still report "start or goal lies inside an inflated obstacle"; only the adapters
+escape. Outputs carry `escaped=True`, and the headless evaluator counts these as
+`escape_moves`, separate from rebuilds and rebuild latency. A goal covered by an
+obstacle still has no route for any planner.
+
 ## A note on scope
 
 [architecture.md](architecture.md) and [adaptors.md](adaptors.md) describe a
