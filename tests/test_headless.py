@@ -110,9 +110,12 @@ def test_collision_episode_is_not_counted_once_per_tick() -> None:
 
     result = simulate(scenario, "visibility")
 
+    # The shared escape step (planners.reroute.escape_waypoint) moves the robot
+    # out of the obstacle and back to its goal, which lies inside it: exactly two
+    # episodes, never one per tick.
     assert result.completed
-    assert result.obstacle_collision_episodes == 1
-    assert result.collision_episodes == 1
+    assert result.obstacle_collision_episodes == 2
+    assert result.collision_episodes == 2
     assert result.minimum_clearance_mm == pytest.approx(-180.0)
 
 

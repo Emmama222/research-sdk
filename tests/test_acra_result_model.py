@@ -495,3 +495,72 @@ def test_collision_free_completion_counts_strict_and_buffer_only() -> None:
     (row,) = summarize_outcomes(runs)
     assert row["collision_free_completed_label"] == "2/4"
     assert row["collision_free_completion_rate"] == 0.5
+
+
+# --- shared escape step (fairness fix, 1 Oct) --------------------------------
+
+
+def test_escape_waypoint_steps_out_of_a_containing_zone_only() -> None:
+    from research_sdk.planners.reroute import escape_waypoint
+
+    assert escape_waypoint((500.0, 0.0), (2000.0, 0.0), [((0.0, 0.0), 210.0)]) is None
+    point = escape_waypoint((100.0, 0.0), (2000.0, 0.0), [((0.0, 0.0), 210.0)])
+    assert point is not None
+    assert point[0] > 100.0 and abs(point[1]) < 1e-9
+    # Step is max(min step 250 mm, overlap 110 mm + margin 120 mm) = 250 mm.
+    assert abs(point[0] - 350.0) < 1e-6
+
+
+@pytest.mark.parametrize("policy", ["event", "cycle"])
+@pytest.mark.parametrize("planner_name", ["voronoi", "prm", "visibility"])
+def test_every_planner_escapes_when_the_robot_is_inside_an_obstacle_zone(
+    planner_name, policy
+) -> None:
+    from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput
+    from research_sdk.world.scene import PlanningObstacle, PlanningScene
+
+    planner = headless._new_planner(planner_name, 0, policy, None)
+    # Obstacle centre 150 mm from the robot: touching (< 180 mm), so inside every
+    # planner's zone (Voronoi 180 mm, PRM and visibility graph 210 mm).
+    scene = PlanningScene(0.0, (PlanningObstacle(7, True, (-1850.0, 0.0), 90.0),))
+    output = planner.plan(
+        PlannerInput(
+            robot_id=0,
+            is_yellow=False,
+            current_pose=(-2000.0, 0.0, 0.0),
+            target_pose=(2000.0, 0.0, 0.0),
+            clearance_mm=headless.planning_clearance_mm(planner_name),
+            scene=scene,
+        )
+    )
+    assert output.escaped
+    assert output.did_reroute
+
+
+def test_escape_steps_are_counted_apart_from_rebuilds(monkeypatch) -> None:
+    real = headless._new_planner
+
+    class _MarkRebuildsAsEscapes:
+        def __init__(self, inner):
+            self.inner = inner
+            self.calls = 0
+
+        def plan(self, planner_input):
+            self.calls += 1
+            output = self.inner.plan(planner_input)
+            if self.calls > 1 and output.did_reroute and output.waypoints:
+                return replace(output, escaped=True)
+            return output
+
+        def reset(self, **kwargs):
+            return self.inner.reset(**kwargs)
+
+    monkeypatch.setattr(
+        headless, "_new_planner", lambda *a, **k: _MarkRebuildsAsEscapes(real(*a, **k))
+    )
+    config = SimulationConfig(replan_policy="cycle", no_route_limit_ms=None)
+    result = simulate(_crossing(), "visibility", config=config)
+    assert result.escape_moves > 0
+    assert result.successful_rebuilds == 0 and result.rebuild_latencies_ms == ()
+    (row,) = summarize_outcomes([result])
+    assert row["escapes_per_run"] == result.escape_moves

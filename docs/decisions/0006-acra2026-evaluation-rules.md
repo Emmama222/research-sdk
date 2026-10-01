@@ -1,4 +1,4 @@
-# 0006: ACRA 2026 evaluation rules (DEC-005 to DEC-021)
+# 0006: ACRA 2026 evaluation rules (DEC-005 to DEC-022)
 
 Date: 2026-10-01
 
@@ -25,6 +25,7 @@ evaluator.
 | DEC-018 | Measurement set for final results: swept clearance between consecutive 20 ms states, a 30 mm buffer logged separately from contact, distinct contact episodes, initial-route retry, separate timing of map build / search / rebuild / event check, route lifetime, and a static one-shot validation set. | `headless.py`, `docs/headless.md` |
 | DEC-019 | Failure rules after the initial plan: a replan taking over 100 ms of wall time stops that robot (`time_limit`); any robot without a route for 1000 ms of simulated time fails the episode (`no_valid_path`). The initial plan is exempt. PRM keeps a fixed cap of 5 resample attempts per call. | `slow_call_limit_ms`, `no_route_limit_ms` |
 | DEC-020 | The prediction horizon sweep uses 0 / 20 / 50 / 100 ms (event policy, 20 ms checks). The 0 ms point is the policy comparison's event @ 20 ms arm. | `RESULT_SETS["horizon-sweep"]` |
+| DEC-022 | All three planners share one escape step (`planners/reroute.py`, `escape_waypoint`): when the robot is inside one of the planner's own inflated obstacles, it steps straight out (`max(250 mm, overlap + 120 mm)`) instead of planning. Previously only Voronoi did this; PRM and the visibility graph refused to plan. Escape steps are counted as `escape_moves`, kept out of rebuild counts and rebuild latency. | `escape_moves`, `escapes_per_run` |
 | DEC-021 | A collision-free completion rate, (S + B) / 200, is reported alongside the hierarchy as the one number comparable with success rates in other work. | `collision_free_completion_rate` |
 
 ## Why the limits have the values they do

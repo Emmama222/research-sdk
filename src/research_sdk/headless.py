@@ -287,6 +287,9 @@ class HeadlessRunResult:
     rebuild_ms_total: float = 0.0
     event_checks: int = 0
     event_check_ms_total: float = 0.0
+    # Shared escape steps (robot stepped out of an obstacle zone without planning).
+    escape_moves: int = 0
+    escape_ms_total: float = 0.0
     # Stage split of successful initial plans: Dijkstra search vs everything else.
     initial_plan_calls: int = 0
     initial_search_ms_total: float = 0.0
@@ -568,6 +571,11 @@ def _plan_call(
         return elapsed_ms, 0, 0
     state.path = new_path
     state.waypoint_index = 1
+    if getattr(output, "escaped", False):
+        # Shared escape step (robot inside an obstacle zone): a new route, but
+        # no map or search, so it is counted apart from rebuilds and latency.
+        record["kind"] = "escape"
+        return elapsed_ms, 0, 0
     record["kind"] = "rebuild"
     record["shift_mm"] = _route_shift(old_route, new_path)
     return elapsed_ms, 1, 0
@@ -991,6 +999,7 @@ def simulate(
     rebuild_attempt_ms: list[float] = []
     rebuild_search_ms: list[float] = []
     event_check_ms: list[float] = []
+    escape_ms: list[float] = []
     initial_search_ms: list[float] = []
     initial_map_ms: list[float] = []
     initial_overlap = _initial_overlap(states, obstacles)
@@ -1068,9 +1077,14 @@ def simulate(
                         if kind == "rebuild":  # failures count, but not in latency
                             rebuild_attempt_ms.append(elapsed_ms)
                             rebuild_search_ms.append(record["search_ms"])
+                    elif kind == "escape":
+                        escape_ms.append(elapsed_ms)
                     else:
                         event_check_ms.append(elapsed_ms)
-                    if kind in ("rebuild", "switch_direct") and state.route_started_s is not None:
+                    if (
+                        kind in ("rebuild", "switch_direct", "escape")
+                        and state.route_started_s is not None
+                    ):
                         close_route(state, simulation_s, "replaced")
                         state.route_started_s = simulation_s
                 # Per-robot stop rules: too slow a call, or too long without a route.
@@ -1355,6 +1369,8 @@ def simulate(
         rebuild_ms_total=sum(rebuild_attempt_ms),
         event_checks=len(event_check_ms),
         event_check_ms_total=sum(event_check_ms),
+        escape_moves=len(escape_ms),
+        escape_ms_total=sum(escape_ms),
         initial_plan_calls=len(initial_search_ms),
         initial_search_ms_total=sum(initial_search_ms),
         initial_map_ms_total=sum(initial_map_ms),
@@ -1781,6 +1797,7 @@ def summarize_outcomes(
                     (run.route_lifetime_ms_max for run in valid), default=None
                 ),
                 "successful_rebuilds": len(latencies),
+                "escapes_per_run": _mean_or_none([run.escape_moves for run in valid]),
                 "failed_replan_share": _rate(
                     sum(run.replan_failures for run in valid),
                     sum(run.replan_failures for run in valid) + len(latencies),

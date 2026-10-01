@@ -70,6 +70,9 @@ class PlannerOutput:
     did_reroute: bool
     endpoint_was_adjusted: bool = False
     endpoint_precision_mode: bool = False
+    # True when the new route is only the shared escape step (robot inside an
+    # obstacle zone), not a planned route; see planners.reroute.escape_waypoint.
+    escaped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +204,7 @@ class VoronoiWaypointManager:
             need_reroute = not is_path_free
 
         did_reroute = False
+        escaped = False
         if is_path_free:
             commit_reroute(state, (), target_pose)
             return PlannerOutput(
@@ -245,6 +249,7 @@ class VoronoiWaypointManager:
             )
             commit_reroute(state, new_waypoints, target_pose)
             did_reroute = not result.reused_previous
+            escaped = result.escaped
         else:
             note_no_reroute(state)
 
@@ -258,6 +263,7 @@ class VoronoiWaypointManager:
             did_reroute=did_reroute,
             endpoint_was_adjusted=endpoint.was_adjusted,
             endpoint_precision_mode=endpoint.precision_mode,
+            escaped=escaped,
         )
 
     def _active_waypoint(self, state: RouteState) -> Pose2D | None:

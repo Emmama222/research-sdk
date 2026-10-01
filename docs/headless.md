@@ -293,6 +293,7 @@ One row per planner and arm. Counts keep their denominators.
 | `routes_per_run`, `route_lifetime_ms_mean`, `route_lifetime_ms_max` | How long installed routes stay in use |
 | `replan_ms_min`, `_mean`, `_p95`, `_max` | Pooled over every successful post-initial rebuild; failed attempts are excluded here and counted in `failed_replans_per_run` and `failed_replan_share` |
 | `successful_rebuilds`, `failed_replan_share` | Successful rebuilds, and failed attempts as a share of all rebuild attempts |
+| `escapes_per_run` | Shared escape steps per run (DEC-022): the robot was inside one of its planner's inflated obstacles and stepped straight out without planning. Not counted as rebuilds and not in the rebuild latency; `runs.csv` has `escape_moves` and `escape_ms_total` |
 | `event_check_ms_mean` | Mean cost of a check that kept the route |
 | `initial_plan_ms_mean`, `initial_search_ms_mean`, `initial_map_ms_mean` | Initial plan split into Dijkstra search and everything else |
 
