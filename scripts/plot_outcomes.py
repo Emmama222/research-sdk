@@ -732,7 +732,8 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
                  f"no route for 1 s (obstacles blocked every path): event {route['event']}, full-path "
                  f"{route['event_route']}, cycle {route['cycle']}")
     else:
-        fails = (f"Across all planners, failed runs from a rebuild over 100 ms (computing time): event "
+        fails = (f"Across all planners, failed runs from a rebuild over 100 ms (computing plus waiting for the CPU, as a "
+                 f"background process): event "
                  f"{slow['event']}, full-path {slow['event_route']}, cycle {slow['cycle']}; failed runs because "
                  f"no route existed for 1 s (obstacles blocked every path): {route['event']}, "
                  f"{route['event_route']}, {route['cycle']}")
@@ -806,7 +807,8 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
                     _mark_cell(ax, x, y, col_w, row_h, "best")
                 elif idx in worst:
                     _mark_cell(ax, x, y, col_w, row_h, "worst")
-                ax.text(x + col_w - 0.019, y + row_h / 2, text, ha="right", va="center", fontsize=6.8,
+                ax.text(x + col_w - 0.019, y + row_h / 2, text, ha="right", va="center",
+                        fontsize=6.8 if len(text) <= 11 else 5.9,
                         color=INK, fontweight="bold" if idx in best else "normal")
             y += row_h
         ax.plot([0.012, 1], [y, y], color=GRID, lw=0.5)
