@@ -13,6 +13,7 @@ from research_sdk.config import (
     FIELD_Y_MIN,
     ROBOT_RADIUS_MM,
     VORONOI_BOUNDARY_INSET_MM,
+    VORONOI_CHECK_MARGIN_MM,
     VORONOI_DENSITY_PERCENT,
     VORONOI_ENDPOINT_REACH_MM,
     VORONOI_HORIZON_MS,
@@ -109,8 +110,12 @@ class VoronoiWaypointManager:
         use_reroute_gate: bool = True,
         periodic_reroute_frames: int | None = DEFAULT_PERIODIC_REROUTE_FRAMES,
         check_full_route: bool = False,
+        check_margin_mm: float = VORONOI_CHECK_MARGIN_MM,
     ) -> None:
         self.horizon_ms = horizon_ms
+        # DEC-023: margin for the per-tick checks (event gate, escape zone,
+        # direct-line and previous-route checks), not for the roadmap.
+        self.check_margin_mm = float(check_margin_mm)
         self.density_percent = density_percent
         self.max_density_nodes = max_density_nodes
         self.obstacle_cost_weight = obstacle_cost_weight
@@ -176,6 +181,7 @@ class VoronoiWaypointManager:
         target = endpoint.target
         target_pose = _with_heading(target, requested_target_pose[2])
 
+        check_clearance = max(float(planner_input.clearance_mm), self.check_margin_mm)
         if self.use_reroute_gate:
             decision = evaluate_route(
                 path_map,
@@ -183,7 +189,7 @@ class VoronoiWaypointManager:
                 target,
                 state,
                 ignore_robots=ignore_robots,
-                clearance_mm=planner_input.clearance_mm,
+                clearance_mm=check_clearance,
                 horizon_ms=self.horizon_ms,
                 target_deadzone_mm=planner_input.reroute_target_deadzone_mm,
                 periodic_reroute_frames=self.periodic_reroute_frames,
@@ -198,7 +204,7 @@ class VoronoiWaypointManager:
                 start,
                 target,
                 ignore_robots=ignore_robots,
-                clearance=planner_input.clearance_mm,
+                clearance=check_clearance,
                 horizon_ms=self.horizon_ms,
             )
             need_reroute = not is_path_free
@@ -232,6 +238,7 @@ class VoronoiWaypointManager:
                 max_density_nodes=self.max_density_nodes,
                 obstacle_cost_weight=self.obstacle_cost_weight,
                 boundary_inset_mm=self.boundary_inset_mm,
+                check_margin_mm=check_clearance,
             )
             result = planner.plan(
                 path_map,

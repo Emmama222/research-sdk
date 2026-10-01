@@ -75,8 +75,12 @@ class VoronoiDijkstraPlanner:
         max_density_nodes: int = VORONOI_MAX_DENSITY_NODES,
         obstacle_cost_weight: float = VORONOI_OBSTACLE_COST_WEIGHT,
         boundary_inset_mm: float = VORONOI_BOUNDARY_INSET_MM,
+        check_margin_mm: float = 0.0,
     ) -> None:
         self.target_dead_zone_mm = float(target_dead_zone_mm)
+        # Margin for the direct-line, previous-route and escape checks (DEC-023);
+        # the roadmap keeps its own corridor clearance.
+        self.check_margin_mm = float(check_margin_mm)
         self.connection_count = int(connection_count)
         self.connection_radius_mm = float(connection_radius_mm)
         self.horizon_ms = horizon_ms
@@ -153,6 +157,7 @@ class VoronoiDijkstraPlanner:
             start,
             target,
             ignore_robots=ignore_robots,
+            clearance=self.check_margin_mm,
             horizon_ms=self.horizon_ms,
         ):
             return PlanResult(
@@ -265,7 +270,10 @@ class VoronoiDijkstraPlanner:
             return None
 
         zones = [
-            (_obstacle_pos(obstacle), _obstacle_radius(obstacle) + ROBOT_RADIUS_MM)
+            (
+                _obstacle_pos(obstacle),
+                _obstacle_radius(obstacle) + ROBOT_RADIUS_MM + self.check_margin_mm,
+            )
             for obstacle in obstacles
         ]
         return escape_waypoint(start, target, zones)
@@ -288,6 +296,7 @@ class VoronoiDijkstraPlanner:
             start,
             next_waypoint,
             ignore_robots=ignore_robots,
+            clearance=self.check_margin_mm,
             horizon_ms=self.horizon_ms,
         )
 

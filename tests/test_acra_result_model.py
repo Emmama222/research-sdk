@@ -564,3 +564,26 @@ def test_escape_steps_are_counted_apart_from_rebuilds(monkeypatch) -> None:
     assert result.successful_rebuilds == 0 and result.rebuild_latencies_ms == ()
     (row,) = summarize_outcomes([result])
     assert row["escapes_per_run"] == result.escape_moves
+
+
+@pytest.mark.parametrize(("margin", "expect_escape"), [(0.0, False), (30.0, True)])
+def test_voronoi_check_margin_sets_where_the_robot_steps_out(margin, expect_escape) -> None:
+    # DEC-023: Voronoi's per-tick checks use voronoi_check_margin_mm (30 mm), the
+    # same margin PRM and the visibility graph check at. An obstacle 200 mm away
+    # is not touching (180 mm) but is inside the 210 mm zone.
+    from research_sdk.planners.api import PlannerAPI
+    from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput
+    from research_sdk.world.scene import PlanningObstacle, PlanningScene
+
+    planner = PlannerAPI(check_margin_mm=margin)
+    scene = PlanningScene(0.0, (PlanningObstacle(7, True, (-1800.0, 0.0), 90.0),))
+    output = planner.plan(
+        PlannerInput(
+            robot_id=0,
+            is_yellow=False,
+            current_pose=(-2000.0, 0.0, 0.0),
+            target_pose=(2000.0, 0.0, 0.0),
+            scene=scene,
+        )
+    )
+    assert output.escaped is expect_escape

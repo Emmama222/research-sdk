@@ -140,6 +140,14 @@ escape. Outputs carry `escaped=True`, and the headless evaluator counts these as
 `escape_moves`, separate from rebuilds and rebuild latency. A goal covered by an
 obstacle still has no route for any planner.
 
+**Check margin (DEC-023).** The per-tick safety checks -- the event gate ("is the
+active segment blocked?"), the escape zone and the direct-line / previous-route
+checks -- run at 30 mm beyond touching distance for every planner. PRM and the
+visibility graph get this from their 30 mm planning clearance; Voronoi, whose
+planning clearance is 0 because its roadmap already keeps 120 mm corridors
+(DEC-014), gets it from `voronoi_check_margin_mm` in `planner_variables.yaml`.
+The roadmap itself is unaffected.
+
 ## A note on scope
 
 [architecture.md](architecture.md) and [adaptors.md](adaptors.md) describe a

@@ -27,6 +27,7 @@ _PLANNER_KEYS = {
     "voronoi_clearance_mm",
     "prm_clearance_mm",
     "visibility_clearance_mm",
+    "voronoi_check_margin_mm",
     "voronoi_boundary_inset_mm",
     "voronoi_density_percent",
     "voronoi_max_density_nodes",
@@ -118,6 +119,7 @@ _CLEARANCE_KEYS = (
     "voronoi_clearance_mm",
     "prm_clearance_mm",
     "visibility_clearance_mm",
+    "voronoi_check_margin_mm",
 )
 for _clearance_key in _CLEARANCE_KEYS:
     _value = PLANNER_VARIABLES[_clearance_key]
