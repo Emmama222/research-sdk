@@ -1,69 +1,68 @@
-# Result batches on this branch
+# Results
 
-Every batch below was written by the headless runner, kinematic backend, at a
-20 ms timestep and 60 Hz control. They were **not** written by the same version
-of the code, and until this commit nothing in a manifest said which version
-wrote which. The `runs.csv` column count is the tell: it grew from 40 to 64 as
-`headless.py` gained features between 17 and 18 September 2026.
-
-| batch | runs | scenarios | clearance mm | `runs.csv` columns | has contact attribution | generated |
-|---|---|---|---|---|---|---|
-| `acra-matrix` | 2367 | 263 | 0 | 40 | no | 17 Sep |
-| `acra-matrix-clr30` | 2367 | 263 | **30** | 40 | no | 17 Sep |
-| `acra-matrix-v2` | 3945 | 263 | 0 | 43 | no | 17 Sep |
-| `acra-horizon-sweep` | 1578 | 263 | 0 | 43 | no | 17 Sep |
-| `acra-sweep-patrol` | 29400 | 200 | 0 | 44 | no | 17 Sep |
-| `acra-6v6-patrol` | 7800 | 200 | 0 | 61 | no | 17 Sep |
-| `acra-clearance-sweep` | 12000 | 200 | swept | 62 | no | 18 Sep |
-| `headless/20260918T092542606739Z` | 600 | 1 | recorded | 64 | **yes** | 18 Sep |
-| `acra-6v6-patrol-rerun` | 7800 | 200 | 0 | 64 | **yes** | 20 Sep |
-
-`acra-6v6-patrol-rerun` is `acra-6v6-patrol` made again with the current
-runner (manifest `code_revision` d0466d0, clean tree, Windows Python 3.13,
-8 workers, 12 minutes): the same generator parameters and seed, so its 200
-scenarios equal the original's `scenarios.tar.gz` once parsed (200 of 200;
-the files differ only in line endings, CRLF from the Windows run), the same
-planners, policies, horizons and periods, and 7800 runs. It carries the
-DEC-008 attribution columns, so `analyse_canonical.py` runs on it; its
-`analysis/` holds that script's `surface.csv` and `report.json`.
-
-Clearance is the planning margin added to robot radius plus obstacle radius.
-The two 2367-run matrices are the same design at 0 and 30 mm; their `runs.csv`
-lacks a `prediction_horizon_ms` column, so those batches cannot be split by
-horizon after the fact.
-
-## Which analysis runs on which batch
-
-| script | requires | runs on |
+| Folder | Status | Contents |
 |---|---|---|
-| `scripts/analyse_matrix.py` | planner x policy rows | `acra-matrix*` |
-| `scripts/analyse_sweep.py` | horizon x period rows | `acra-sweep-patrol`, `acra-6v6-patrol`, `acra-clearance-sweep` |
-| `scripts/analyse_canonical.py` | `obstacle_episodes_robot_initiated` and `_obstacle_initiated` columns (DEC-008) | `acra-6v6-patrol-rerun` only |
+| `acra2026-final/` | **Current** — the only source for final ACRA 2026 claims | The three result sets below, generated from the frozen scenario bank `scenarios/acra2026-200` with the revised measurement set (DEC-016/017/018) |
+| `_archive-pre-shared-escape/` | Superseded 1 Oct 2026 — do not use for final claims | The full ACRA 2026 set before DEC-022 (only Voronoi had an escape step). Voronoi numbers remain a reference; see its `README.md` |
+| `_archive-pre-dec016/` | Historical — do not use for final claims | Every batch produced before the revised result model (17–20 Sep 2026). See its own `README.md` for what each batch contains |
+| `plot_empty_voronoi.py`, `voronoi_empty_virtual_sites.svg` | Current | Figure of the bounded Voronoi diagram on an empty field |
 
-`analyse_canonical.py` exits with "runs.csv predates DEC-008 attribution" on
-`acra-6v6-patrol`, the batch it was written for, and on every other `acra-*`
-batch. The safety metric it defines, zero robot-initiated contacts, is
-available from `acra-6v6-patrol-rerun` (20 September), which repeats that
-batch's design with the current runner. The 600-run single-scenario batch
-under `headless/` also carries the columns, and it is a check of the runner,
-not a comparison.
+Ad-hoc headless runs without `--output-dir` are written to `results/headless/<timestamp>/`.
 
-## Do the committed tables reproduce?
+## `acra2026-final/`
 
-Checked 18 September by regenerating from the committed `runs.csv` files:
-`analyse_matrix.py` on all three `acra-matrix*` batches and `analyse_sweep.py`
-on `acra-sweep-patrol`. Every `table_*.tex` reproduces byte for byte apart from
-line endings. The CSV and `stats.json` side outputs differ because the scripts
-gained columns and statistics after the outputs were committed; the numbers in
-the LaTeX tables did not change.
+| Result set | Folder | Arms | Runs |
+|---|---|---|---:|
+| One-Shot Planning Validation | `one-shot-validation/` | Frozen obstacles, one route per robot, no execution | 600 |
+| Dynamic Replanning Policy Comparison | `policy-comparison/` | Cycle and event at 20 ms and 100 ms checks, horizon 0 ms | 2,400 |
+| Prediction Horizon Sweep | `horizon-sweep/` | Event at 20 ms checks, horizon 20 / 50 / 100 ms (0 ms point reused from the policy comparison) | 1,800 |
 
-## Reading numbers across batches
+Figures and tables live in `acra2026-final/figures/` and `acra2026-final/tables/`;
+[`acra2026-final/figures/README.md`](acra2026-final/figures/README.md) indexes
+what each figure shows and how to read it.
 
-Do not compare a number from a clearance-0 batch with one from
-`acra-matrix-clr30` or from the draft paper's static and dynamic tables, which
-were run at 30 mm on a different harness (`dynamic_scenario.py`,
-`static_scenario.py`). State the batch, its clearance and its horizon beside
-every quoted value.
+Each folder is written once and never overwritten. A re-run goes into a new,
+dated folder and the superseded one moves to the archive.
 
-From this commit on, `manifest.json` records `code_revision` and `code_dirty`,
-so a future batch can be matched to the code that wrote it.
+## Analysis scripts that read archived batches
+
+`scripts/analyse_matrix.py`, `analyse_sweep.py`, `paper_numbers.py`,
+`plot_headline.py`, `plot_heatmap_v2.py`, `plot_plan_efficiency.py`,
+`plot_prediction_horizon.py`, `plot_tradeoff.py` and `report_batch.py` default
+to paths under the old `results/acra-*` names. Pass the batch path explicitly
+(now under `results/_archive-pre-dec016/`) to rerun them on historical data.
+
+## Commands (Windows, from the repo root, single worker for clean latency)
+
+```powershell
+python -m research_sdk.headless --result-set one-shot-validation --output-dir results/acra2026-final/one-shot-validation
+python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
+python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
+python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
+```
+
+Tables are written to `results/acra2026-final/tables/` as CSV and Markdown.
+Failure rules (DEC-019): a post-initial replan over 100 ms stops that robot;
+any robot without a route for 1000 ms fails the episode.
+
+## Supporting result sets
+
+Run on the same machine and settings as the main sets (single worker), then re-run the scripts:
+
+```powershell
+python -m research_sdk.headless --result-set event-route-ablation --workers 1 --output-dir results/acra2026-final/supporting/event-route-ablation
+python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
+```
+
+| Set | Arms | Runs | Status | Purpose |
+|---|---|---:|---|---|
+| `event-route-ablation` | Full-path recalculation (`event_route`) @ 20 and 100 ms | 1,200 | **Done** (`supporting/event-route-ablation/`) | DEC-010 ablation against the policy comparison's event arms |
+| `horizon-150-check` | event @ 20 ms, horizon 150 ms | 600 | Optional, not run | Full-bank repeat of the 20-scenario preview behind DEC-020 |
+| `no-route-500-check` | event @ 20 ms, no-route limit 500 ms | 600 | Optional, not run | Full-bank repeat of the 20-scenario preview behind the DEC-019 amendment |
+
+The two optional sets can be run the same way (`--result-set horizon-150-check`
+or `--result-set no-route-500-check`); the plotting script draws their figures
+only when their results exist. Decision ids are summarised in
+[`docs/decisions/0006-acra2026-evaluation-rules.md`](../docs/decisions/0006-acra2026-evaluation-rules.md).

@@ -110,9 +110,12 @@ def test_collision_episode_is_not_counted_once_per_tick() -> None:
 
     result = simulate(scenario, "visibility")
 
+    # The shared escape step (planners.reroute.escape_waypoint) moves the robot
+    # out of the obstacle and back to its goal, which lies inside it: exactly two
+    # episodes, never one per tick.
     assert result.completed
-    assert result.obstacle_collision_episodes == 1
-    assert result.collision_episodes == 1
+    assert result.obstacle_collision_episodes == 2
+    assert result.collision_episodes == 2
     assert result.minimum_clearance_mm == pytest.approx(-180.0)
 
 
@@ -137,6 +140,8 @@ def test_batch_summary_and_exports_are_research_ready(tmp_path) -> None:
         "runs_json",
         "summary_csv",
         "summary_json",
+        "summary_legacy_csv",
+        "rebuild_calls_csv",
         "manifest",
     }
     with paths["runs_csv"].open(newline="") as stream:

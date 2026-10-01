@@ -11,31 +11,28 @@ import networkx as nx
 from research_sdk.config import (
     DEFENCE_X_MM,
     DEFENCE_Y_MM,
-    FIELD_X_MIN,
     FIELD_X_MAX,
-    FIELD_Y_MIN,
+    FIELD_X_MIN,
     FIELD_Y_MAX,
-    GOAL_DEPTH_MM,
+    FIELD_Y_MIN,
     GOAL_HALF_WIDTH_MM,
     ROBOT_RADIUS_MM,
     VORONOI_BOUNDARY_INSET_MM,
     VORONOI_CONNECTION_COUNT,
     VORONOI_CONNECTION_RADIUS_MM,
     VORONOI_DENSITY_PERCENT,
-    VORONOI_ESCAPE_MARGIN_MM,
     VORONOI_HORIZON_MS,
     VORONOI_MAX_DENSITY_NODES,
-    VORONOI_MIN_ESCAPE_STEP_MM,
     VORONOI_OBSTACLE_COST_WEIGHT,
     VORONOI_TARGET_DEAD_ZONE_MM,
 )
-from research_sdk.planners.common import StepRecorder
+from research_sdk.planners.common import StepRecorder, timed_dijkstra_path
+from research_sdk.planners.reroute import escape_waypoint
 from research_sdk.world.map.geometry import distance_2_segment
 from research_sdk.world.map.voronoi.voronoi_generator import (
     VoronoiObstacle,
     generate_voronoi_map_from_scene,
 )
-
 
 Point = tuple[float, float]
 RobotKey = tuple[bool, int]
@@ -57,6 +54,7 @@ class PlanResult:
     target_mm: Point
     waypoints_mm: tuple[Point, ...]
     reused_previous: bool = False
+    escaped: bool = False
     used_direct_path: bool = False
 
 
@@ -149,7 +147,7 @@ class VoronoiDijkstraPlanner:
             ignore_robots=ignore_robots,
         )
         if escape_waypoint is not None:
-            return PlanResult(target_mm=target, waypoints_mm=(escape_waypoint,))
+            return PlanResult(target_mm=target, waypoints_mm=(escape_waypoint,), escaped=True)
 
         if not skip_direct_path and scene.is_path_free(
             start,
@@ -266,45 +264,11 @@ class VoronoiDijkstraPlanner:
         except Exception:
             return None
 
-        push_x = 0.0
-        push_y = 0.0
-        max_overlap = 0.0
-        for obstacle in obstacles:
-            pos = _obstacle_pos(obstacle)
-            radius = _obstacle_radius(obstacle) + ROBOT_RADIUS_MM
-            dx = start[0] - pos[0]
-            dy = start[1] - pos[1]
-            dist = hypot(dx, dy)
-            overlap = radius - dist
-            if overlap < 0.0:
-                continue
-            if dist <= 1e-6:
-                dx = target[0] - pos[0]
-                dy = target[1] - pos[1]
-                dist = hypot(dx, dy)
-            if dist <= 1e-6:
-                dx, dy, dist = 1.0, 0.0, 1.0
-            weight = max(overlap, 1.0)
-            push_x += (dx / dist) * weight
-            push_y += (dy / dist) * weight
-            max_overlap = max(max_overlap, overlap)
-
-        push_len = hypot(push_x, push_y)
-        if push_len <= 1e-6:
-            return None
-
-        step_mm = max(
-            VORONOI_MIN_ESCAPE_STEP_MM,
-            max_overlap + VORONOI_ESCAPE_MARGIN_MM,
-        )
-        x_min, x_max, y_min, y_max = float(FIELD_X_MIN), float(FIELD_X_MAX), float(FIELD_Y_MIN), float(FIELD_Y_MAX)
-        m = VORONOI_TARGET_DEAD_ZONE_MM
-        return (
-            max(x_min + m, min(x_max - m,
-                start[0] + (push_x / push_len) * step_mm)),
-            max(y_min + m, min(y_max - m,
-                start[1] + (push_y / push_len) * step_mm)),
-        )
+        zones = [
+            (_obstacle_pos(obstacle), _obstacle_radius(obstacle) + ROBOT_RADIUS_MM)
+            for obstacle in obstacles
+        ]
+        return escape_waypoint(start, target, zones)
 
     def _previous_path_is_valid(
         self,
@@ -408,7 +372,7 @@ class VoronoiDijkstraPlanner:
             for neighbour_id, cost in edges:
                 graph.add_edge(node_id, neighbour_id, weight=cost)
         try:
-            return nx.dijkstra_path(graph, start_id, target_id, weight="weight")
+            return timed_dijkstra_path(graph, start_id, target_id, weight="weight")
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             return []
 

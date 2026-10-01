@@ -35,7 +35,6 @@ What changed vs. the original ``PRMController``, and why -- see
 
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import replace
 
@@ -54,12 +53,14 @@ from research_sdk.planners.common import (
     PlanResult,
     StepRecorder,
     path_length_mm,
+    timed_dijkstra_path,
 )
 from research_sdk.planners.Dijkstra.waypoint_manager import PlannerInput, PlannerOutput
 from research_sdk.planners.reroute import (
     DEFAULT_PERIODIC_REROUTE_FRAMES,
     RouteState,
     commit_reroute,
+    escape_waypoint,
     evaluate_route,
     note_no_reroute,
 )
@@ -263,7 +264,7 @@ def plan(
                     graph.add_edge(global_i, global_j, weight=weight)
 
         try:
-            node_path = nx.dijkstra_path(graph, start_idx, goal_idx, weight="weight")
+            node_path = timed_dijkstra_path(graph, start_idx, goal_idx, weight="weight")
         except (nx.NetworkXNoPath, nx.NodeNotFound):
             seed = None if seed is None else seed + 1
             rng = np.random.default_rng(seed)
@@ -320,6 +321,9 @@ class PRMPlanner:
         if self.use_reroute_gate and planner_input.scene is not None:
             return self._gated_plan(planner_input)
         request = _plan_request_from_planner_input(planner_input)
+        escaped = _escape_output(planner_input, request)
+        if escaped is not None:
+            return escaped
         result = plan(request, **self._plan_kwargs)
         return _planner_output_from_plan_result(planner_input, result)
 
@@ -364,6 +368,11 @@ class PRMPlanner:
             return replace(cached, need_reroute=False, did_reroute=False)
 
         request = _plan_request_from_planner_input(planner_input)
+        escaped = _escape_output(planner_input, request)
+        if escaped is not None:
+            commit_reroute(state, escaped.waypoints[1:], target_pose)
+            self._last_output_by_robot[robot_key] = escaped
+            return escaped
         result = plan(request, **self._plan_kwargs)
         output = _planner_output_from_plan_result(planner_input, result)
         # Result waypoints start at the robot's own position; the gate's
@@ -381,6 +390,36 @@ class PRMPlanner:
         key = (bool(is_yellow), int(robot_id))
         self._state_by_robot.pop(key, None)
         self._last_output_by_robot.pop(key, None)
+
+
+def _escape_output(planner_input: PlannerInput, request: PlanRequest) -> PlannerOutput | None:
+    """Shared escape step (``planners.reroute.escape_waypoint``), gated or not.
+
+    If the robot is inside one of this planner's own inflated obstacles --
+    where ``plan()`` would refuse to start -- step out first, exactly as the
+    Voronoi planner does. Waypoints start at the robot's own position, like
+    every other result of this planner.
+    """
+    start = (float(planner_input.current_pose[0]), float(planner_input.current_pose[1]))
+    target = (float(planner_input.target_pose[0]), float(planner_input.target_pose[1]))
+    escape = escape_waypoint(
+        start,
+        target,
+        [(o.pos_mm, o.radius_mm + request.total_clearance_mm) for o in request.obstacles],
+    )
+    if escape is None:
+        return None
+    heading = float(planner_input.target_pose[2]) if len(planner_input.target_pose) > 2 else 0.0
+    target_pose = (target[0], target[1], heading)
+    return PlannerOutput(
+        waypoints=((start[0], start[1], heading), (escape[0], escape[1], heading), target_pose),
+        current_waypoint_index=0,
+        active_target_pose=target_pose,
+        is_path_free=False,
+        need_reroute=True,
+        did_reroute=True,
+        escaped=True,
+    )
 
 
 def _plan_request_from_planner_input(planner_input: PlannerInput) -> PlanRequest:

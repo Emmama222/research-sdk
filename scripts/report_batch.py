@@ -2,7 +2,7 @@
 
 Produces, in <batch>/report/:
 
-    scenarios/<name>.png      what the scenario looks like (obstacles, patrol
+    scenario_png/<name>.png   what the scenario looks like (obstacles, patrol
                               routes, robot start -> target)
     metrics_overall.csv       completion, timing, path quality
     metrics_replan.csv        replan counts, trigger breakdown, planning cost
@@ -14,7 +14,9 @@ The two heatmaps are deliberately separate figures, each carrying ONE metric, so
 neither has to mix "higher is better" with "lower is better" inside one frame.
 
 Usage:
-    python scripts/report_batch.py results/acra-6v6-canonical [--scenarios 3]
+    python scripts/report_batch.py results/acra-6v6-canonical
+    python scripts/report_batch.py --scenario-only \
+        --scenario-dir scenarios/acra2026-200 --scenario-output scenario_png
 """
 
 from __future__ import annotations
@@ -131,6 +133,28 @@ def render_scenario(path: Path, out: Path) -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150, bbox_inches="tight", facecolor="white")
     plt.close(fig)
+
+
+def render_scenario_folder(
+    scenario_dir: Path,
+    output_dir: Path,
+    limit: int | None = None,
+) -> list[Path]:
+    """Render a stable, sorted scenario bank and return the written PNG paths."""
+    if not scenario_dir.is_dir():
+        raise FileNotFoundError(f"Scenario directory does not exist: {scenario_dir}")
+    if limit is not None and limit < 1:
+        raise ValueError("Scenario render limit must be positive or omitted")
+
+    files = sorted(scenario_dir.glob("*.json"))
+    if limit is not None:
+        files = files[:limit]
+    rendered: list[Path] = []
+    for path in files:
+        output = output_dir / f"{path.stem}.png"
+        render_scenario(path, output)
+        rendered.append(output)
+    return rendered
 
 
 def load(folder: Path) -> pd.DataFrame:
@@ -323,20 +347,52 @@ def _replans(d):  # median replans per run
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("batch", type=Path)
-    ap.add_argument("--scenarios", type=int, default=3, help="How many scenario PNGs")
+    ap.add_argument("batch", type=Path, nargs="?")
+    ap.add_argument(
+        "--scenarios",
+        type=int,
+        default=None,
+        help="Maximum number of scenario PNGs (default: render every JSON file)",
+    )
+    ap.add_argument(
+        "--scenario-dir",
+        type=Path,
+        default=None,
+        help="Scenario JSON directory (default: <batch>/scenarios)",
+    )
+    ap.add_argument(
+        "--scenario-output",
+        type=Path,
+        default=None,
+        help="PNG directory (default: <batch>/report/scenario_png)",
+    )
+    ap.add_argument(
+        "--scenario-only",
+        action="store_true",
+        help="Render scenario PNGs without requiring runs.csv or producing metric reports",
+    )
     a = ap.parse_args()
 
+    if a.batch is None and not a.scenario_only:
+        ap.error("batch is required unless --scenario-only is used")
+
+    scenario_dir = a.scenario_dir
+    if scenario_dir is None:
+        scenario_dir = Path("scenarios/acra2026-200") if a.batch is None else a.batch / "scenarios"
+    scenario_output = a.scenario_output
+    if scenario_output is None:
+        scenario_output = Path("scenario_png") if a.batch is None else a.batch / "report/scenario_png"
+
+    rendered = render_scenario_folder(scenario_dir, scenario_output, a.scenarios)
+    print(f"  rendered {len(rendered)} scenario PNG(s) into {scenario_output}")
+    if a.scenario_only:
+        return
+
+    assert a.batch is not None
     out = a.batch / "report"
     out.mkdir(parents=True, exist_ok=True)
     runs = load(a.batch)
     print(f"  attribution: {runs.attribution.iloc[0]}")
-
-    sdir = a.batch / "scenarios"
-    files = sorted(sdir.glob("*.json"))[: a.scenarios] if sdir.is_dir() else []
-    for f in files:
-        render_scenario(f, out / "scenarios" / f"{f.stem}.png")
-    print(f"  rendered {len(files)} scenario PNG(s)")
 
     keys = [k for k in KEYS if k in runs]
     for name, cols in GROUPS.items():

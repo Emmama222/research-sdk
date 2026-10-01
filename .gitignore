@@ -231,3 +231,6 @@ results/*.tgz
 results/*.tar.gz
 *.bundle
 
+
+# Local assistant settings
+.claude/

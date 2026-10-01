@@ -27,6 +27,7 @@ clock but does not delay execution on the virtual clock.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from collections.abc import Sequence
@@ -45,6 +46,7 @@ from research_sdk.config import (
     planning_clearance_mm,
 )
 from research_sdk.exporters import CSVExporter, JSONExporter
+from research_sdk.machine_info import machine_info
 from research_sdk.planners import (
     PlannerAPI,
     PlannerInput,
@@ -52,6 +54,7 @@ from research_sdk.planners import (
     VisibilityGraphPlanner,
     VoronoiDijkstraPlanner,
 )
+from research_sdk.planners.common import reset_search_time, search_time_ms
 from research_sdk.scenario_generator import GeneratorConfig, perturb_scenario, random_scenario
 from research_sdk.ui.scenarios import (
     DEFAULT_PATROL_SPEED_MMPS,
@@ -67,6 +70,40 @@ RobotKey = tuple[bool, int]
 PLANNER_NAMES = ("voronoi", "prm", "visibility")
 REPLAN_POLICIES = ("once", "cycle", "event", "event_route")
 NEAR_MISS_MM = 50.0
+# Revised result model (DEC-016..018): a clearance below SAFETY_BUFFER_MM is a
+# buffer violation, a clearance at or below zero is physical contact.
+SAFETY_BUFFER_MM = 30.0
+OUTCOME_CODES = ("S", "B", "P", "I", "X")  # strict, buffer-only, physical, incomplete, invalid
+DEFAULT_SCENARIO_BANK = Path("scenarios") / "acra2026-200"
+ACRA_SCENARIO_COUNT = 200
+ONE_SHOT_RESULT_SET = "one-shot-validation"
+# Dynamic result sets as (policy, prediction horizon ms, check interval ms) arms.
+RESULT_SETS: dict[str, tuple[tuple[str, float, float], ...]] = {
+    "policy-comparison": (
+        ("cycle", 0.0, 20.0),
+        ("event", 0.0, 20.0),
+        ("cycle", 0.0, 100.0),
+        ("event", 0.0, 100.0),
+    ),
+    # The 0 ms point of the sweep is the policy comparison's event @ 20 ms arm.
+    "horizon-sweep": (
+        ("event", 20.0, 20.0),
+        ("event", 50.0, 20.0),
+        ("event", 100.0, 20.0),
+    ),
+    # Supporting sets (DEC-010 ablation, DEC-019/020 evidence); compare each with
+    # the matching arms of the main sets rather than reading it on its own.
+    "event-route-ablation": (
+        ("event_route", 0.0, 20.0),
+        ("event_route", 0.0, 100.0),
+    ),
+    "horizon-150-check": (("event", 150.0, 20.0),),
+    "no-route-500-check": (("event", 0.0, 20.0),),
+}
+# Result sets that change a configuration value as well as the arms.
+RESULT_SET_OVERRIDES: dict[str, dict[str, float]] = {
+    "no-route-500-check": {"no_route_limit_ms": 500.0},
+}
 TIME_SCALE_CHOICES = (1, 10, 100, 200, 500)
 _PACING_INTERVAL_WALL_S = 0.01
 
@@ -89,6 +126,14 @@ class SimulationConfig:
     prediction_horizon_ms: float = 0.0
     # None preserves the original unpaced, maximum-throughput behavior.
     time_scale: float | None = None
+    # Failure rules (DEC-019; None disables). A post-initial replan slower than
+    # ``slow_call_limit_ms`` on the wall clock counts as no route: that robot is
+    # stopped (``time_limit``) and the others continue. The initial plan (map
+    # construction) is exempt and reported as one-shot timing. Any robot that
+    # goes ``no_route_limit_ms`` of simulated time without a valid route fails
+    # and ends the episode (``no_valid_path``).
+    no_route_limit_ms: float | None = 1000.0
+    slow_call_limit_ms: float | None = 100.0
 
     def __post_init__(self) -> None:
         for name in (
@@ -116,6 +161,10 @@ class SimulationConfig:
             raise ValueError("periodic_reroute_frames must be at least 1 or None")
         if self.time_scale is not None and (not isfinite(self.time_scale) or self.time_scale <= 0):
             raise ValueError("time_scale must be finite and positive, or None for unpaced")
+        for name in ("no_route_limit_ms", "slow_call_limit_ms"):
+            value = getattr(self, name)
+            if value is not None and (not isfinite(value) or value <= 0):
+                raise ValueError(f"{name} must be finite and positive, or None to disable")
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,9 +244,64 @@ class HeadlessRunResult:
     # closed on its own could not have been avoided by replanning.
     obstacle_episodes_obstacle_initiated: int = 0
     obstacle_episodes_robot_initiated: int = 0
+    # --- Revised result model (DEC-016/017/018) -------------------------------
+    # Outcome: S strict, B buffer-only, P physical contact, I incomplete,
+    # X invalid scenario (geometric overlap at t = 0).
+    outcome: str = ""
+    initial_overlap: bool = False
+    # Swept checks between consecutive states; obstacle-obstacle is not recorded.
+    rr_contact_episodes: int = 0
+    ro_contact_episodes: int = 0
+    rr_buffer_episodes: int = 0
+    ro_buffer_episodes: int = 0
+    ro_contact_obstacle_initiated: int = 0
+    min_swept_clearance_mm: float | None = None
+    first_contact_ms: float | None = None
+    # Per-robot stops (the rest of the team keeps running).
+    robots_stopped_no_path: int = 0
+    robots_stopped_time_limit: int = 0
+    stopped_robots: str = ""
+    # "" when the episode ran to completion or the time limit; "no_valid_path"
+    # when a robot went too long without a route and the episode was failed.
+    episode_end_reason: str = ""
+    # Initial no-route handling: the robot waits at its start and retries.
+    initial_retries_total: int = 0
+    initial_wait_ms_total: float = 0.0
+    initial_wait_ms_max: float = 0.0
+    # Route persistence (initial route included).
+    route_count: int = 0
+    route_lifetime_ms_total: float = 0.0
+    route_lifetime_ms_max: float = 0.0
+    # Why each installed route ended.
+    route_ends_replaced: int = 0
+    route_ends_goal: int = 0
+    route_ends_stopped: int = 0
+    route_ends_episode_end: int = 0
+    # Per robot "B0:3r/60ms" = 3 failed initial attempts, 60 ms waiting.
+    initial_route_by_robot: str = ""
+    # Successful post-initial rebuilds only: failed attempts are counted in
+    # ``replan_failures`` and kept out of the latency statistics (DEC-019).
+    successful_rebuilds: int = 0
+    rebuild_ms_min: float | None = None
+    rebuild_ms_max: float | None = None
+    rebuild_ms_total: float = 0.0
+    event_checks: int = 0
+    event_check_ms_total: float = 0.0
+    # Shared escape steps (robot stepped out of an obstacle zone without planning).
+    escape_moves: int = 0
+    escape_ms_total: float = 0.0
+    # Stage split of successful initial plans: Dijkstra search vs everything else.
+    initial_plan_calls: int = 0
+    initial_search_ms_total: float = 0.0
+    initial_map_ms_total: float = 0.0
+    rebuild_search_ms_total: float = 0.0
+    # Individual rebuild latencies; exported to rebuild_calls.csv, not runs.csv.
+    rebuild_latencies_ms: tuple[float, ...] = ()
 
     def to_record(self) -> dict[str, str | bool | int | float | None]:
-        return asdict(self)
+        record = asdict(self)
+        record.pop("rebuild_latencies_ms", None)
+        return record
 
 
 @dataclass(slots=True)
@@ -214,6 +318,14 @@ class _RobotState:
     last_heading: float | None = None
     heading_change_rad: float = 0.0
     sharp_turns: int = 0
+    # True while the robot has no initial route and waits at its start.
+    awaiting_route: bool = False
+    initial_attempts: int = 0
+    first_route_s: float | None = None
+    route_started_s: float | None = None
+    fail_streak_start_s: float | None = None
+    stop_reason: str = ""
+    stopped_s: float | None = None
 
     @property
     def key(self) -> RobotKey:
@@ -394,6 +506,7 @@ def _plan_call(
         planner.reset(robot_id=robot.robot_id, is_yellow=robot.is_yellow)
     reached = state.reached_since_call > 0
     state.reached_since_call = 0
+    reset_search_time()
     started = perf_counter()
     try:
         output = planner.plan(
@@ -411,6 +524,7 @@ def _plan_call(
     except Exception:  # noqa: BLE001 - planner failures are experiment result data
         output = None
     elapsed_ms = (perf_counter() - started) * 1000.0
+    record["search_ms"] = min(search_time_ms(), elapsed_ms)
     waypoints = (
         ()
         if output is None
@@ -457,6 +571,11 @@ def _plan_call(
         return elapsed_ms, 0, 0
     state.path = new_path
     state.waypoint_index = 1
+    if getattr(output, "escaped", False):
+        # Shared escape step (robot inside an obstacle zone): a new route, but
+        # no map or search, so it is counted apart from rebuilds and latency.
+        record["kind"] = "escape"
+        return elapsed_ms, 0, 0
     record["kind"] = "rebuild"
     record["shift_mm"] = _route_shift(old_route, new_path)
     return elapsed_ms, 1, 0
@@ -536,6 +655,8 @@ def _plan_robot(
 
 def _advance_waypoint(state: _RobotState, config: SimulationConfig) -> bool:
     """Advance reached waypoint indices and return whether the path is done."""
+    if state.awaiting_route:
+        return False
     if state.failed:
         return True
     while state.waypoint_index < len(state.path):
@@ -554,7 +675,7 @@ def _next_position(
     step_s: float,
     config: SimulationConfig,
 ) -> Point:
-    if _advance_waypoint(state, config):
+    if state.awaiting_route or _advance_waypoint(state, config):
         return state.position
     target = state.path[state.waypoint_index]
     distance = _distance(state.position, target)
@@ -706,6 +827,92 @@ def _collisions(
     return robot_pairs, obstacle_pairs, min(clearances) if clearances else None
 
 
+def _swept_min_distance(a0: Point, a1: Point, b0: Point, b1: Point) -> float:
+    """Minimum centre distance of two points moving linearly from *0 to *1.
+
+    Both bodies are interpolated over the same interval, so a contact that
+    starts and ends between two sampled states is still found.
+    """
+    rx, ry = a0[0] - b0[0], a0[1] - b0[1]
+    dx = (a1[0] - a0[0]) - (b1[0] - b0[0])
+    dy = (a1[1] - a0[1]) - (b1[1] - b0[1])
+    denom = dx * dx + dy * dy
+    t = 0.0 if denom <= 1e-12 else min(1.0, max(0.0, -(rx * dx + ry * dy) / denom))
+    return hypot(rx + t * dx, ry + t * dy)
+
+
+def _swept_clearances(
+    states: Sequence[_RobotState],
+    before: Sequence[Point],
+    after: Sequence[Point],
+    obstacles: Sequence[ScenarioObstacle],
+    t0_s: float,
+    t1_s: float,
+) -> tuple[dict[tuple[RobotKey, RobotKey], float], dict[tuple[RobotKey, RobotKey], float]]:
+    """Minimum robot-robot and robot-obstacle clearance over [t0_s, t1_s].
+
+    Obstacle-obstacle pairs are deliberately not evaluated (DEC-017).
+    """
+    robot_pairs: dict[tuple[RobotKey, RobotKey], float] = {}
+    obstacle_pairs: dict[tuple[RobotKey, RobotKey], float] = {}
+    for i, first in enumerate(states):
+        for j in range(i + 1, len(states)):
+            key = tuple(sorted((first.key, states[j].key)))
+            robot_pairs[key] = (
+                _swept_min_distance(before[i], after[i], before[j], after[j])
+                - 2.0 * ROBOT_RADIUS_MM
+            )
+    for obstacle in obstacles:
+        o0 = _obstacle_position(obstacle, t0_s)
+        o1 = _obstacle_position(obstacle, t1_s)
+        obstacle_key = (obstacle.is_yellow, obstacle.obstacle_id)
+        for i, state in enumerate(states):
+            obstacle_pairs[(state.key, obstacle_key)] = (
+                _swept_min_distance(before[i], after[i], o0, o1)
+                - ROBOT_RADIUS_MM
+                - obstacle.radius_mm
+            )
+    return robot_pairs, obstacle_pairs
+
+
+def count_new_episodes(previous: set, current: set) -> int:
+    """Pairs in contact now that were not in contact in the previous interval.
+
+    A sustained overlap is one episode; separating and touching again is a new one.
+    """
+    return len(current - previous)
+
+
+def _initial_overlap(states: Sequence[_RobotState], obstacles: Sequence[ScenarioObstacle]) -> bool:
+    """True when any robot already touches a robot or obstacle at t = 0."""
+    robot_pairs, obstacle_pairs, _ = _collisions(states, obstacles, 0.0)
+    return bool(robot_pairs or obstacle_pairs)
+
+
+def classify_outcome(
+    *, completed: bool, contact_episodes: int, buffer_episodes: int, initial_overlap: bool
+) -> str:
+    """Highest-severity run class: X invalid, I incomplete, P contact, B buffer, S strict."""
+    if initial_overlap:
+        return "X"
+    if not completed:
+        return "I"
+    if contact_episodes > 0:
+        return "P"
+    if buffer_episodes > 0:
+        return "B"
+    return "S"
+
+
+def _stop_robot(state: _RobotState, reason: str, simulation_s: float) -> None:
+    """Freeze a robot in place for the rest of the episode and flag why."""
+    state.failed = True
+    state.awaiting_route = False
+    state.stop_reason = reason
+    state.stopped_s = simulation_s
+    state.velocity_mmps = (0.0, 0.0)
+
+
 def _pace_virtual_clock(simulation_s: float, wall_started: float, time_scale: float) -> None:
     """Prevent virtual time from running ahead of the selected wall-time ratio."""
     delay_s = wall_started + simulation_s / time_scale - perf_counter()
@@ -768,6 +975,38 @@ def simulate(
         (obstacle.is_yellow, obstacle.obstacle_id): obstacle for obstacle in obstacles
     }
     minimum_clearance_mm: float | None = None
+    # Revised result model trackers (DEC-016/017/018).
+    swept_rr_contact: set = set()
+    swept_ro_contact: set = set()
+    swept_rr_buffer: set = set()
+    swept_ro_buffer: set = set()
+    rr_contact_episodes = 0
+    ro_contact_episodes = 0
+    rr_buffer_episodes = 0
+    ro_buffer_episodes = 0
+    ro_contact_obstacle_initiated = 0
+    min_swept_clearance: float | None = None
+    first_contact_s: float | None = None
+    route_lifetimes_s: list[float] = []
+    route_ends = {"replaced": 0, "goal": 0, "stopped": 0, "episode_end": 0}
+
+    def close_route(state: _RobotState, end_s: float, reason: str) -> None:
+        if state.route_started_s is None:
+            return
+        route_lifetimes_s.append(end_s - state.route_started_s)
+        route_ends[reason] += 1
+        state.route_started_s = None
+    rebuild_attempt_ms: list[float] = []
+    rebuild_search_ms: list[float] = []
+    event_check_ms: list[float] = []
+    escape_ms: list[float] = []
+    initial_search_ms: list[float] = []
+    initial_map_ms: list[float] = []
+    initial_overlap = _initial_overlap(states, obstacles)
+    no_route_limit_s = (
+        None if config.no_route_limit_ms is None else config.no_route_limit_ms / 1000.0
+    )
+    episode_end_reason = ""
     simulation_s = 0.0
     next_control_s = 0.0
     next_pace_s = (
@@ -777,12 +1016,20 @@ def simulate(
     ticks = 0
 
     while True:
-        control_due = first_cycle or (policy != "once" and simulation_s + 1e-9 >= next_control_s)
+        # Robots without an initial route retry once per check interval, even
+        # under the plan-once policy.
+        pending_initial = any(state.awaiting_route for state in states)
+        control_due = first_cycle or (
+            (policy != "once" or pending_initial) and simulation_s + 1e-9 >= next_control_s
+        )
         if control_due:
             for state in states:
                 if state.failed:
                     continue
-                if not first_cycle and _advance_waypoint(state, config):
+                first = first_cycle or state.awaiting_route
+                if policy == "once" and not first:
+                    continue
+                if not first and _advance_waypoint(state, config):
                     continue  # arrived: stop consulting the planner
                 scene = _scene_at(
                     scenario,
@@ -794,10 +1041,15 @@ def simulate(
                 )
                 record: dict = {}
                 elapsed_ms, replanned, failed = _plan_call(
-                    planner, state, scene, simulation_s, config, first_cycle, record
+                    planner, state, scene, simulation_s, config, first, record
                 )
                 call_durations_ms.append(elapsed_ms)
                 kind = record.get("kind")
+                # A post-initial rebuild attempt either produced a new multi-waypoint
+                # route or produced no route at all. A result that only confirms the
+                # direct line (``check`` / ``switch_direct``) is a check, even when the
+                # planner reports it rerouted -- e.g. after the cycle policy's reset.
+                record["rebuild_attempted"] = not first and kind in ("rebuild", "failed")
                 if kind in ("initial", "rebuild"):
                     rebuild_ms.append(elapsed_ms)
                 else:
@@ -807,13 +1059,66 @@ def simulate(
                     shifts.append(record.get("shift_mm", 0.0))
                 elif kind == "switch_direct":
                     direct_switches += 1
-                if first_cycle:
+                if first:
                     initial_durations_ms.append(elapsed_ms)
+                    state.initial_attempts += 1
+                    if kind == "initial":
+                        state.awaiting_route = False
+                        state.first_route_s = simulation_s
+                        state.route_started_s = simulation_s
+                        initial_search_ms.append(record["search_ms"])
+                        initial_map_ms.append(elapsed_ms - record["search_ms"])
+                    else:
+                        # No route yet: wait at the start and retry next interval.
+                        state.failed = False
+                        state.awaiting_route = True
+                else:
+                    if record.get("rebuild_attempted"):
+                        if kind == "rebuild":  # failures count, but not in latency
+                            rebuild_attempt_ms.append(elapsed_ms)
+                            rebuild_search_ms.append(record["search_ms"])
+                    elif kind == "escape":
+                        escape_ms.append(elapsed_ms)
+                    else:
+                        event_check_ms.append(elapsed_ms)
+                    if (
+                        kind in ("rebuild", "switch_direct", "escape")
+                        and state.route_started_s is not None
+                    ):
+                        close_route(state, simulation_s, "replaced")
+                        state.route_started_s = simulation_s
+                # Per-robot stop rules: too slow a call, or too long without a route.
+                if kind == "failed":
+                    if state.fail_streak_start_s is None:
+                        state.fail_streak_start_s = simulation_s
+                else:
+                    state.fail_streak_start_s = None
+                stop_reason = ""
+                if (
+                    config.slow_call_limit_ms is not None
+                    and not first
+                    and record.get("rebuild_attempted")
+                    and elapsed_ms > config.slow_call_limit_ms
+                ):
+                    stop_reason = "time_limit"
+                elif (
+                    no_route_limit_s is not None
+                    and state.fail_streak_start_s is not None
+                    and simulation_s - state.fail_streak_start_s + 1e-9 >= no_route_limit_s
+                ):
+                    stop_reason = "no_valid_path"
+                if stop_reason:
+                    close_route(state, simulation_s, "stopped")
+                    _stop_robot(state, stop_reason, simulation_s)
+                    if stop_reason == "no_valid_path":
+                        episode_end_reason = "no_valid_path"
                 replan_count += replanned
                 replan_failures += failed
             first_cycle = False
             while next_control_s <= simulation_s + 1e-9:
                 next_control_s += config.control_period_s
+            if episode_end_reason:
+                break  # a robot went too long without a route: the episode fails
 
         all_paths_done = all(_advance_waypoint(state, config) for state in states)
         current_robot, current_obstacle, clearance = _collisions(
@@ -846,13 +1151,47 @@ def simulate(
             break
 
         step_s = min(config.dt_s, config.max_simulation_s - simulation_s)
-        if policy != "once":
+        if policy != "once" or any(state.awaiting_route for state in states):
             gap = next_control_s - simulation_s
             if gap > 1e-9:
                 step_s = min(step_s, gap)
         if current_robot or current_obstacle:
             contact_time_s += step_s
         next_positions = [_next_position(state, step_s, config) for state in states]
+        rr_now, ro_now = _swept_clearances(
+            states,
+            [state.position for state in states],
+            next_positions,
+            obstacles,
+            simulation_s,
+            simulation_s + step_s,
+        )
+        rr_contact_now = {key for key, value in rr_now.items() if value <= 0.0}
+        ro_contact_now = {key for key, value in ro_now.items() if value <= 0.0}
+        rr_buffer_now = {key for key, value in rr_now.items() if value < SAFETY_BUFFER_MM}
+        ro_buffer_now = {key for key, value in ro_now.items() if value < SAFETY_BUFFER_MM}
+        new_ro_contacts = ro_contact_now - swept_ro_contact
+        rr_contact_episodes += count_new_episodes(swept_rr_contact, rr_contact_now)
+        ro_contact_episodes += count_new_episodes(swept_ro_contact, ro_contact_now)
+        rr_buffer_episodes += count_new_episodes(swept_rr_buffer, rr_buffer_now)
+        ro_buffer_episodes += count_new_episodes(swept_ro_buffer, ro_buffer_now)
+        for robot_key, obstacle_key in new_ro_contacts:
+            contact_state = state_by_key.get(robot_key)
+            contact_obstacle = obstacle_by_key.get(obstacle_key)
+            if contact_state is not None and contact_obstacle is not None and _obstacle_initiated(
+                contact_state.position, contact_state.velocity_mmps, contact_obstacle, simulation_s
+            ):
+                ro_contact_obstacle_initiated += 1
+        if first_contact_s is None and (rr_contact_now or ro_contact_now):
+            first_contact_s = simulation_s
+        interval_values = [*rr_now.values(), *ro_now.values()]
+        if interval_values:
+            lowest = min(interval_values)
+            min_swept_clearance = (
+                lowest if min_swept_clearance is None else min(min_swept_clearance, lowest)
+            )
+        swept_rr_contact, swept_ro_contact = rr_contact_now, ro_contact_now
+        swept_rr_buffer, swept_ro_buffer = rr_buffer_now, ro_buffer_now
         for state, position in zip(states, next_positions):
             moved = _distance(state.position, position)
             if moved > 1e-6:
@@ -871,10 +1210,32 @@ def simulate(
             state.position = position
         simulation_s += step_s
         ticks += 1
+        for state in states:
+            # A route's lifetime ends when its robot reaches the goal.
+            if state.route_started_s is not None and _advance_waypoint(state, config):
+                close_route(state, simulation_s, "goal")
         if next_pace_s is not None and simulation_s + 1e-9 >= next_pace_s:
             _pace_virtual_clock(simulation_s, wall_started, config.time_scale)
             next_pace_s = simulation_s + config.time_scale * _PACING_INTERVAL_WALL_S
 
+    for state in states:
+        # Still active when the episode ended (time limit or episode failure).
+        close_route(state, simulation_s, "episode_end")
+        if state.awaiting_route:  # never obtained a route
+            state.awaiting_route = False
+            state.failed = True
+    initial_waits_s = [
+        state.first_route_s
+        if state.first_route_s is not None
+        else state.stopped_s
+        if state.stopped_s is not None
+        else simulation_s
+        for state in states
+    ]
+    stopped = [state for state in states if state.stop_reason]
+    initial_retries = sum(
+        state.initial_attempts - (1 if state.first_route_s is not None else 0) for state in states
+    )
     failed_states = [state for state in states if state.failed]
     successful_paths_done = all(
         state.failed or _advance_waypoint(state, config) for state in states
@@ -964,6 +1325,57 @@ def simulate(
             for state in states
             if state.robot.target_mm is not None
         ),
+        outcome=classify_outcome(
+            completed=completed,
+            contact_episodes=rr_contact_episodes + ro_contact_episodes,
+            buffer_episodes=rr_buffer_episodes + ro_buffer_episodes,
+            initial_overlap=initial_overlap,
+        ),
+        initial_overlap=initial_overlap,
+        rr_contact_episodes=rr_contact_episodes,
+        ro_contact_episodes=ro_contact_episodes,
+        rr_buffer_episodes=rr_buffer_episodes,
+        ro_buffer_episodes=ro_buffer_episodes,
+        ro_contact_obstacle_initiated=ro_contact_obstacle_initiated,
+        min_swept_clearance_mm=min_swept_clearance,
+        first_contact_ms=None if first_contact_s is None else first_contact_s * 1000.0,
+        robots_stopped_no_path=sum(state.stop_reason == "no_valid_path" for state in stopped),
+        robots_stopped_time_limit=sum(state.stop_reason == "time_limit" for state in stopped),
+        episode_end_reason=episode_end_reason,
+        stopped_robots=",".join(
+            f"{'Y' if state.robot.is_yellow else 'B'}{state.robot.robot_id}:"
+            f"{state.stop_reason}@{state.stopped_s * 1000.0:.0f}ms"
+            for state in stopped
+        ),
+        initial_retries_total=initial_retries,
+        initial_wait_ms_total=sum(initial_waits_s) * 1000.0,
+        initial_wait_ms_max=max(initial_waits_s, default=0.0) * 1000.0,
+        route_count=len(route_lifetimes_s),
+        route_lifetime_ms_total=sum(route_lifetimes_s) * 1000.0,
+        route_lifetime_ms_max=max(route_lifetimes_s, default=0.0) * 1000.0,
+        route_ends_replaced=route_ends["replaced"],
+        route_ends_goal=route_ends["goal"],
+        route_ends_stopped=route_ends["stopped"],
+        route_ends_episode_end=route_ends["episode_end"],
+        initial_route_by_robot=";".join(
+            f"{'Y' if state.robot.is_yellow else 'B'}{state.robot.robot_id}:"
+            f"{state.initial_attempts - (1 if state.first_route_s is not None else 0)}r/"
+            f"{wait * 1000.0:.0f}ms"
+            for state, wait in zip(states, initial_waits_s)
+        ),
+        successful_rebuilds=len(rebuild_attempt_ms),
+        rebuild_ms_min=min(rebuild_attempt_ms, default=None),
+        rebuild_ms_max=max(rebuild_attempt_ms, default=None),
+        rebuild_ms_total=sum(rebuild_attempt_ms),
+        event_checks=len(event_check_ms),
+        event_check_ms_total=sum(event_check_ms),
+        escape_moves=len(escape_ms),
+        escape_ms_total=sum(escape_ms),
+        initial_plan_calls=len(initial_search_ms),
+        initial_search_ms_total=sum(initial_search_ms),
+        initial_map_ms_total=sum(initial_map_ms),
+        rebuild_search_ms_total=sum(rebuild_search_ms),
+        rebuild_latencies_ms=tuple(rebuild_attempt_ms),
     )
 
 
@@ -996,8 +1408,13 @@ def run_experiments(
     predictions_ms: Sequence[float] | None = None,
     replan_periods_ms: Sequence[float] | None = None,
     clearances_mm: Sequence[float] | None = None,
+    arms: Sequence[tuple[str, float, float]] | None = None,
 ) -> list[HeadlessRunResult]:
     """Run scenario x planner x policy x trial in stable order.
+
+    ``arms`` replaces the policy x horizon x period grid with an explicit list
+    of ``(policy, prediction horizon ms, check interval ms)`` combinations, so
+    a result set runs exactly the arms in ``RESULT_SETS`` and nothing else.
 
     ``scenario_sets`` optionally labels each scenario (for example ``random``)
     so summaries aggregate across a generated set. ``workers > 1`` runs the
@@ -1064,6 +1481,28 @@ def run_experiments(
         ]
     if backend != "kinematic":
         raise ValueError(f"Unknown simulation backend: {backend}")
+    if arms is not None:
+        arm_list = [(str(p), float(h), float(t)) for p, h, t in arms]
+        bad_arms = [
+            arm
+            for arm in arm_list
+            if arm[0] not in REPLAN_POLICIES or arm[1] < 0 or arm[2] <= 0
+        ]
+        if bad_arms or not arm_list:
+            raise ValueError(f"Invalid arms: {bad_arms or 'none given'}")
+    else:
+        arm_list = [
+            (policy, horizon, period)
+            for policy in policies
+            for horizon in predictions
+            for period in periods
+            # Plan-once never replans, so the replan period cannot change it; and
+            # with a no-prediction arm present its prediction variants are skipped.
+            if not (
+                policy == "once"
+                and (period != periods[0] or (horizon > 0 and 0.0 in predictions))
+            )
+        ]
     jobs = [
         (
             scenario,
@@ -1081,13 +1520,8 @@ def run_experiments(
         )
         for scenario, label in zip(scenarios, labels)
         for planner_name in planners
-        for policy in policies
-        for horizon in predictions
-        for period in periods
+        for policy, horizon, period in arm_list
         for clearance in clearances
-        # Plan-once never replans, so the replan period cannot change it; and
-        # with a no-prediction arm present its prediction variants are skipped.
-        if not (policy == "once" and (period != periods[0] or (horizon > 0 and 0.0 in predictions)))
         for trial in range(1, trials + 1)
     ]
     step = max(1, len(jobs) // 20)
@@ -1235,6 +1669,322 @@ def summarize_results(
     return summaries
 
 
+def _rate(numerator: int, denominator: int) -> float | None:
+    return numerator / denominator if denominator else None
+
+
+def _mean_or_none(values: Sequence[float]) -> float | None:
+    return fmean(values) if values else None
+
+
+def summarize_outcomes(
+    results: Sequence[HeadlessRunResult],
+) -> list[dict[str, str | bool | int | float | None]]:
+    """One row per planner and arm in the revised result model (DEC-016/017/018).
+
+    Denominators: ``valid_runs`` (the matched scenarios, 200 for the ACRA bank)
+    for completion and incompletion; ``completed`` for strict, buffer-only and
+    physical rates; failed completions ``F = B + P`` and physical runs ``P`` for
+    contact severity. Per-run quantities are means over valid runs. Replan
+    latency statistics pool every successful post-initial rebuild; failed
+    attempts are counted separately.
+    Invalid runs (initial overlap) are counted but excluded from everything else.
+    """
+    groups: dict[tuple, list[HeadlessRunResult]] = {}
+    for result in results:
+        key = (
+            result.scenario_set or result.scenario,
+            result.planner,
+            result.replan_policy,
+            round(result.replan_period_ms, 3),
+            result.prediction_horizon_ms,
+            result.planning_clearance_mm,
+            result.backend,
+        )
+        groups.setdefault(key, []).append(result)
+
+    rows = []
+    for (scenario_set, planner, policy, period, horizon, clearance, backend), runs in groups.items():
+        valid = [run for run in runs if run.outcome != "X"]
+        count = {code: sum(run.outcome == code for run in valid) for code in OUTCOME_CODES}
+        n = len(valid)
+        strict, buffer_only, physical, incomplete = (count[c] for c in ("S", "B", "P", "I"))
+        completed = strict + buffer_only + physical
+        failed = buffer_only + physical
+        contact_runs = [run for run in valid if run.outcome == "P"]
+        rr = sum(run.rr_contact_episodes for run in contact_runs)
+        ro = sum(run.ro_contact_episodes for run in contact_runs)
+        ro_all = sum(run.ro_contact_episodes for run in valid)
+        latencies = [value for run in valid for value in run.rebuild_latencies_ms]
+        initial_calls = sum(run.initial_plan_calls for run in valid)
+        route_count = sum(run.route_count for run in valid)
+        goal_times = [run.time_to_goal_ms for run in valid if run.time_to_goal_ms is not None]
+        rows.append(
+            {
+                "scenario_set": scenario_set,
+                "planner": planner,
+                "replan_policy": policy,
+                "replan_period_ms": period,
+                "prediction_horizon_ms": horizon,
+                "planning_clearance_mm": clearance,
+                "backend": backend,
+                "scenarios": len({run.scenario for run in runs}),
+                "runs": len(runs),
+                "invalid_runs": len(runs) - n,
+                "valid_runs": n,
+                "completed": completed,
+                "strict": strict,
+                "buffer_only": buffer_only,
+                "physical": physical,
+                "incomplete": incomplete,
+                "completed_label": f"{completed}/{n}",
+                "strict_label": f"{strict}/{completed}",
+                "buffer_only_label": f"{buffer_only}/{completed}",
+                "physical_label": f"{physical}/{completed}",
+                "incomplete_label": f"{incomplete}/{n}",
+                "collision_free_completed": strict + buffer_only,
+                "collision_free_completed_label": f"{strict + buffer_only}/{n}",
+                # Comparison metric (DEC-021): completed with no physical contact,
+                # out of all valid runs. Buffer entries count as collision-free.
+                "collision_free_completion_rate": _rate(strict + buffer_only, n),
+                "completion_rate": _rate(completed, n),
+                "strict_rate": _rate(strict, completed),
+                "buffer_only_rate": _rate(buffer_only, completed),
+                "physical_rate": _rate(physical, completed),
+                "safety_compromised_rate": _rate(failed, completed),
+                "incomplete_rate": _rate(incomplete, n),
+                "rr_contacts_per_failed_run": _rate(rr, failed),
+                "ro_contacts_per_failed_run": _rate(ro, failed),
+                "contacts_per_failed_run": _rate(rr + ro, failed),
+                "contacts_per_physical_run": _rate(rr + ro, physical),
+                "contacts_in_incomplete_runs": sum(
+                    run.rr_contact_episodes + run.ro_contact_episodes
+                    for run in valid
+                    if run.outcome == "I"
+                ),
+                "ro_contacts_obstacle_initiated_share": _rate(
+                    sum(run.ro_contact_obstacle_initiated for run in valid), ro_all
+                ),
+                "episodes_failed_no_route": sum(
+                    run.episode_end_reason == "no_valid_path" for run in valid
+                ),
+                "robots_stopped_time_limit": sum(run.robots_stopped_time_limit for run in valid),
+                "initial_retries_per_run": _mean_or_none(
+                    [run.initial_retries_total for run in valid]
+                ),
+                "initial_wait_ms_per_run": _mean_or_none(
+                    [run.initial_wait_ms_total for run in valid]
+                ),
+                "initial_wait_ms_max": max((run.initial_wait_ms_max for run in valid), default=None),
+                "replans_per_run": _mean_or_none([run.replan_count for run in valid]),
+                "failed_replans_per_run": _mean_or_none([run.replan_failures for run in valid]),
+                "blocked_time_pct_mean": _mean_or_none(
+                    [
+                        100.0
+                        * run.replan_failures
+                        * run.replan_period_ms
+                        / max(run.simulated_duration_ms * run.robot_count, 1e-9)
+                        for run in valid
+                    ]
+                ),
+                "routes_per_run": _mean_or_none([run.route_count for run in valid]),
+                "route_lifetime_ms_mean": (
+                    sum(run.route_lifetime_ms_total for run in valid) / route_count
+                    if route_count
+                    else None
+                ),
+                "route_lifetime_ms_max": max(
+                    (run.route_lifetime_ms_max for run in valid), default=None
+                ),
+                "successful_rebuilds": len(latencies),
+                "escapes_per_run": _mean_or_none([run.escape_moves for run in valid]),
+                "failed_replan_share": _rate(
+                    sum(run.replan_failures for run in valid),
+                    sum(run.replan_failures for run in valid) + len(latencies),
+                ),
+                "replan_ms_min": min(latencies, default=None),
+                "replan_ms_mean": _mean_or_none(latencies),
+                "replan_ms_p95": _percentile(latencies, 0.95) if latencies else None,
+                "replan_ms_max": max(latencies, default=None),
+                "event_check_ms_mean": _rate(
+                    sum(run.event_check_ms_total for run in valid),
+                    sum(run.event_checks for run in valid),
+                ),
+                "initial_plan_ms_mean": _rate(
+                    sum(run.initial_search_ms_total + run.initial_map_ms_total for run in valid),
+                    initial_calls,
+                ),
+                "initial_search_ms_mean": _rate(
+                    sum(run.initial_search_ms_total for run in valid), initial_calls
+                ),
+                "initial_map_ms_mean": _rate(
+                    sum(run.initial_map_ms_total for run in valid), initial_calls
+                ),
+                "time_to_goal_ms_mean": _mean_or_none(goal_times),
+            }
+        )
+    return rows
+
+
+def _polyline_turning(points: Sequence[Point]) -> tuple[float, int]:
+    """Total absolute heading change (rad) and turns sharper than 90 degrees."""
+    headings = [
+        atan2(b[1] - a[1], b[0] - a[0]) for a, b in pairwise(points) if _distance(a, b) > 1e-6
+    ]
+    turns = [abs((second - first + pi) % (2 * pi) - pi) for first, second in pairwise(headings)]
+    return sum(turns), sum(turn > pi / 2 for turn in turns)
+
+
+def validate_one_shot(
+    scenario: Scenario,
+    planner_name: str,
+    *,
+    seed: int = 0,
+    clearance_mm: float | None = None,
+) -> list[dict[str, str | bool | int | float | None]]:
+    """One-Shot Planning Validation: one initial route per robot, nothing executed.
+
+    Obstacles are frozen at their initial positions, the other robots sit at
+    their starts, the prediction horizon is 0 ms and nothing is replanned. The
+    planning call is split into Dijkstra search and everything else (map or
+    roadmap construction plus validation) with the same boundary for all
+    planners.
+    """
+    scenario.require_complete()
+    if planner_name not in PLANNER_NAMES:
+        raise ValueError(f"Unknown planner {planner_name!r}; choose from {PLANNER_NAMES}")
+    clearance = planning_clearance_mm(planner_name) if clearance_mm is None else clearance_mm
+    config = SimulationConfig(replan_policy="once", planning_clearance_mm=clearance)
+    planner = _new_planner(planner_name, seed, "once")
+    rows: list[dict[str, str | bool | int | float | None]] = []
+    for robot in scenario.robots:
+        assert robot.target_mm is not None
+        state = _RobotState(
+            robot=robot, path=(robot.start_mm,), failed=False, position=robot.start_mm
+        )
+        scene = PlanningScene(
+            timestamp=0.0, obstacles=_planning_obstacles(scenario, robot, planner_name)
+        )
+        record: dict = {}
+        elapsed_ms, _, _ = _plan_call(planner, state, scene, 0.0, config, True, record)
+        success = record.get("kind") == "initial"
+        straight = _distance(robot.start_mm, robot.target_mm)
+        length = _path_length(state.path) if success else None
+        turning, sharp = _polyline_turning(state.path) if success else (None, None)
+        rows.append(
+            {
+                "scenario": scenario.name,
+                "planner": planner_name,
+                "robot": f"{'Y' if robot.is_yellow else 'B'}{robot.robot_id}",
+                "planning_clearance_mm": clearance,
+                "route_available": success,
+                "total_ms": elapsed_ms,
+                "search_ms": record.get("search_ms"),
+                "map_ms": elapsed_ms - record.get("search_ms", 0.0),
+                "waypoints": len(state.path) if success else 0,
+                "path_length_mm": length,
+                "straight_line_mm": straight,
+                "path_excess": (length / straight - 1.0) if success and straight > 0 else None,
+                "turning_rad_per_m": (
+                    turning / (length / 1000.0) if success and length and length > 0 else None
+                ),
+                "sharp_turns": sharp,
+            }
+        )
+    return rows
+
+
+def summarize_one_shot(
+    rows: Sequence[dict],
+) -> list[dict[str, str | bool | int | float | None]]:
+    """Per-planner One-Shot Planning Validation table over all scenarios."""
+    by_planner: dict[str, list[dict]] = {}
+    for row in rows:
+        by_planner.setdefault(str(row["planner"]), []).append(row)
+    summaries = []
+    for planner, planner_rows in by_planner.items():
+        scenarios: dict[str, list[dict]] = {}
+        for row in planner_rows:
+            scenarios.setdefault(str(row["scenario"]), []).append(row)
+        ok = [row for row in planner_rows if row["route_available"]]
+        totals = [float(row["total_ms"]) for row in planner_rows]
+        searches = [float(row["search_ms"]) for row in planner_rows]
+        maps = [float(row["map_ms"]) for row in planner_rows]
+        full = sum(all(r["route_available"] for r in group) for group in scenarios.values())
+        # Requests with a clear straight line need no map (~0.03 ms) and dominate
+        # the means; the planners differ only on requests that needed a map.
+        mapped = [r for r in ok if int(r["waypoints"]) > 2]
+        mapped_ms = [float(r["total_ms"]) for r in mapped]
+        summaries.append(
+            {
+                "planner": planner,
+                "scenarios": len(scenarios),
+                "robot_calls": len(planner_rows),
+                "scenarios_all_routes": full,
+                "scenarios_all_routes_label": f"{full}/{len(scenarios)}",
+                "robot_routes_available": len(ok),
+                "robot_routes_label": f"{len(ok)}/{len(planner_rows)}",
+                "map_ms_mean": _mean_or_none(maps),
+                "map_ms_p95": _percentile(maps, 0.95) if maps else None,
+                "search_ms_mean": _mean_or_none(searches),
+                "search_ms_p95": _percentile(searches, 0.95) if searches else None,
+                "total_ms_mean": _mean_or_none(totals),
+                "total_ms_p95": _percentile(totals, 0.95) if totals else None,
+                "total_ms_max": max(totals, default=None),
+                "map_requiring_calls": len(mapped),
+                "map_requiring_ms_median": median(mapped_ms) if mapped_ms else None,
+                "map_requiring_ms_p95": _percentile(mapped_ms, 0.95) if mapped_ms else None,
+                "map_requiring_path_excess_median": (
+                    median([float(r["path_excess"]) for r in mapped]) if mapped else None
+                ),
+                "scenario_initial_plan_ms_mean": _mean_or_none(
+                    [sum(float(r["total_ms"]) for r in group) for group in scenarios.values()]
+                ),
+                "path_excess_mean": _mean_or_none([float(r["path_excess"]) for r in ok]),
+                "path_excess_median": median([float(r["path_excess"]) for r in ok]) if ok else None,
+                "turning_rad_per_m_mean": _mean_or_none(
+                    [float(r["turning_rad_per_m"]) for r in ok if r["turning_rad_per_m"] is not None]
+                ),
+                "sharp_turns_per_route": _mean_or_none([float(r["sharp_turns"]) for r in ok]),
+            }
+        )
+    return summaries
+
+
+def write_one_shot_results(
+    rows: Sequence[dict],
+    destination: str | Path,
+    *,
+    extra_manifest: dict | None = None,
+) -> dict[str, Path]:
+    """Write per-robot rows, the per-planner table and a manifest."""
+    folder = Path(destination)
+    folder.mkdir(parents=True, exist_ok=True)
+    summaries = summarize_one_shot(rows)
+    paths = {
+        "robots_csv": CSVExporter().export(list(rows), folder / "robots.csv"),
+        "summary_csv": CSVExporter().export(summaries, folder / "summary.csv"),
+        "summary_json": JSONExporter().export(summaries, folder / "summary.json"),
+    }
+    manifest = {
+        "generated_at": datetime.now(UTC).isoformat(),
+        "engine": "research_sdk.headless",
+        "result_set": ONE_SHOT_RESULT_SET,
+        "model": "frozen obstacles at initial positions, other robots at their starts, "
+        "prediction 0 ms, one initial route request per robot, no execution",
+        "timing": "wall clock, single process; search_ms is time inside the shared "
+        "networkx Dijkstra call, map_ms is the rest of the planning call",
+        "robot_calls": len(rows),
+        **_code_revision(),
+        "machine": machine_info(),
+        **(extra_manifest or {}),
+    }
+    manifest_path = folder / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    paths["manifest"] = manifest_path
+    return paths
+
+
 def _code_revision() -> dict:
     """Git revision of the code that wrote a batch, or None when unknown.
 
@@ -1252,6 +2002,8 @@ def _code_revision() -> dict:
     import subprocess
 
     root = Path(__file__).resolve().parents[2]
+    # Never take git's index lock: another tool may be using the repository.
+    git_env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
     try:
         revision = (
             subprocess.run(
@@ -1260,6 +2012,7 @@ def _code_revision() -> dict:
                 text=True,
                 timeout=5,
                 check=False,
+                env=git_env,
             ).stdout.strip()
             or None
         )
@@ -1270,6 +2023,7 @@ def _code_revision() -> dict:
                 text=True,
                 timeout=5,
                 check=False,
+                env=git_env,
             ).stdout.strip()
             != ""
             if revision
@@ -1291,17 +2045,35 @@ def write_results(
     folder = Path(destination)
     folder.mkdir(parents=True, exist_ok=True)
     raw_records = [result.to_record() for result in results]
-    summaries = summarize_results(results)
+    summaries = summarize_outcomes(results)
+    rebuild_calls = [
+        {
+            "scenario": result.scenario,
+            "planner": result.planner,
+            "replan_policy": result.replan_policy,
+            "replan_period_ms": round(result.replan_period_ms, 3),
+            "prediction_horizon_ms": result.prediction_horizon_ms,
+            "attempt": index,
+            "rebuild_ms": value,
+        }
+        for result in results
+        for index, value in enumerate(result.rebuild_latencies_ms, start=1)
+    ]
     paths = {
         "runs_csv": CSVExporter().export(raw_records, folder / "runs.csv"),
         "runs_json": JSONExporter().export(raw_records, folder / "runs.json"),
         "summary_csv": CSVExporter().export(summaries, folder / "summary.csv"),
         "summary_json": JSONExporter().export(summaries, folder / "summary.json"),
+        "summary_legacy_csv": CSVExporter().export(
+            summarize_results(results), folder / "summary_legacy.csv"
+        ),
+        "rebuild_calls_csv": CSVExporter().export(rebuild_calls, folder / "rebuild_calls.csv"),
     }
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
         "engine": "research_sdk.headless",
-        "provenance": _provenance(),
+        # Keep the manifest helper name aligned with the implementation above.
+        "provenance": _code_revision(),
         "model": "See backend and evidence_directory for each run",
         "backends": sorted({result.backend for result in results}),
         "physics_equivalence": bool(results) and all(r.backend == "grsim" for r in results),
@@ -1323,7 +2095,18 @@ def write_results(
         "radius grown by predicted travel (WorldMap / Obstacle.dynamic_radius_0)",
         "scenario_sets": sorted({result.scenario_set or result.scenario for result in results}),
         "latency_model": "planning latency measured on wall clock; not applied to virtual time",
+        "result_model": "DEC-016/017/018: outcome S/B/P/I (X = invalid initial overlap); "
+        f"buffer < {SAFETY_BUFFER_MM:g} mm, contact <= 0 mm, swept between states; "
+        "robot-robot and robot-obstacle only; summary.csv averages over valid runs",
+        "failure_rules": {
+            "replan_time_limit_ms": config.slow_call_limit_ms,
+            "replan_time_limit_effect": "post-initial replan slower than this stops that robot",
+            "no_route_limit_ms": config.no_route_limit_ms,
+            "no_route_limit_effect": "any robot without a valid route this long fails the episode",
+            "initial_plan": "exempt from the time limit; reported as one-shot timing",
+        },
         **_code_revision(),
+        "machine": machine_info(),
         **(extra_manifest or {}),
     }
     manifest_path = folder / "manifest.json"
@@ -1345,6 +2128,38 @@ def _scenario_paths(inputs: Sequence[str]) -> list[Path]:
     return list(dict.fromkeys(paths))
 
 
+def load_scenario_bank(folder: str | Path, expected: int | None = None) -> list[Scenario]:
+    """Load a frozen scenario bank: every ``*.json`` directly in ``folder``, nothing else.
+
+    Raises when the folder is missing, a name repeats, or the count differs
+    from ``expected``.
+    """
+    bank = Path(folder)
+    if not bank.is_dir():
+        raise FileNotFoundError(f"Scenario bank is not a directory: {bank}")
+    paths = sorted(bank.glob("*.json"))
+    scenarios = _load_scenarios(paths)
+    names = [scenario.name for scenario in scenarios]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(f"Scenario bank {bank} repeats scenario names: {duplicates[:5]}")
+    if expected is not None and len(scenarios) != expected:
+        raise ValueError(f"Scenario bank {bank} holds {len(scenarios)} scenarios, expected {expected}")
+    return scenarios
+
+
+def scenario_bank_fingerprint(folder: str | Path) -> dict:
+    """Path, count and SHA-256 over the bank's JSON files (line endings normalised)."""
+    bank = Path(folder)
+    digest = hashlib.sha256()
+    paths = sorted(bank.glob("*.json"))
+    for path in paths:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n"))
+    return {"scenario_bank": bank.as_posix(), "scenario_bank_files": len(paths),
+            "scenario_bank_sha256": digest.hexdigest()}
+
+
 def _load_scenarios(paths: Sequence[Path]) -> list[Scenario]:
     return [Scenario.from_dict(json.loads(path.read_text(encoding="utf-8"))) for path in paths]
 
@@ -1362,6 +2177,12 @@ def _parser() -> argparse.ArgumentParser:
         "scenarios",
         nargs="*",
         help="Scenario JSON files or directories (default: scenarios/)",
+    )
+    parser.add_argument(
+        "--scenario-bank",
+        type=Path,
+        default=None,
+        help="Explicit scenario directory for a reproducible matched bank; cannot be combined with positional scenarios",
     )
     parser.add_argument(
         "--planner",
@@ -1495,6 +2316,34 @@ def _parser() -> argparse.ArgumentParser:
         help="Parallel processes for the kinematic backend (0 = all CPUs)",
     )
     parser.add_argument(
+        "--result-set",
+        choices=(ONE_SHOT_RESULT_SET, *RESULT_SETS),
+        default=None,
+        help=(
+            "Run one ACRA result set exactly as defined (arms fixed, scenario bank "
+            f"defaults to {DEFAULT_SCENARIO_BANK.as_posix()} and must hold "
+            f"{ACRA_SCENARIO_COUNT} scenarios)"
+        ),
+    )
+    parser.add_argument(
+        "--expect-scenarios",
+        type=int,
+        default=None,
+        help="Fail unless the scenario bank holds exactly this many scenarios",
+    )
+    parser.add_argument(
+        "--no-route-limit-ms",
+        type=float,
+        default=1000.0,
+        help="Fail the episode when any robot goes this long without a route (default 1000; 0 disables)",
+    )
+    parser.add_argument(
+        "--slow-call-limit-ms",
+        type=float,
+        default=100.0,
+        help="Stop a robot whose post-initial replan exceeds this wall time (0 disables)",
+    )
+    parser.add_argument(
         "--fail-on-incomplete",
         action="store_true",
         help="Exit with status 2 if any run fails or times out",
@@ -1514,8 +2363,20 @@ def _build_cases(args) -> tuple[list[Scenario], list[str], GeneratorConfig]:
         jitter_mm=args.jitter_mm,
     )
     scenario_seed = args.seed if args.scenario_seed is None else args.scenario_seed
-    only_random = args.random > 0 and not args.scenarios
-    saved = [] if only_random else _load_scenarios(_scenario_paths(args.scenarios))
+    if args.scenario_bank is not None and args.scenarios:
+        raise ValueError("--scenario-bank cannot be combined with positional scenarios")
+    if args.scenario_bank is not None:
+        # A bank run uses exactly the bank: no generated, jittered or extra files.
+        if args.random or args.perturb or args.no_saved:
+            raise ValueError(
+                "--scenario-bank runs exactly the bank; --random, --perturb and "
+                "--no-saved are not allowed with it"
+            )
+        scenarios = load_scenario_bank(args.scenario_bank, expected=args.expect_scenarios)
+        return scenarios, [Path(args.scenario_bank).name] * len(scenarios), generator
+    scenario_inputs = [str(args.scenario_bank)] if args.scenario_bank is not None else args.scenarios
+    only_random = args.random > 0 and not scenario_inputs
+    saved = [] if only_random else _load_scenarios(_scenario_paths(scenario_inputs))
     scenarios: list[Scenario] = []
     labels: list[str] = []
     for base in saved:
@@ -1537,7 +2398,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.result_set is not None:
+            if args.scenarios:
+                raise ValueError("--result-set uses a scenario bank, not positional scenarios")
+            if (
+                args.policy != ["once"]
+                or args.predict_ms != [0.0]
+                or args.replan_ms is not None
+                or args.random
+                or args.perturb
+            ):
+                raise ValueError(
+                    "--result-set fixes the arms and scenarios; drop --policy, --predict-ms, "
+                    "--replan-ms, --random and --perturb"
+                )
+            if args.scenario_bank is None:
+                args.scenario_bank = DEFAULT_SCENARIO_BANK
+            if args.expect_scenarios is None and args.scenario_bank == DEFAULT_SCENARIO_BANK:
+                args.expect_scenarios = ACRA_SCENARIO_COUNT
         scenarios, labels, generator = _build_cases(args)
+        bank_manifest = (
+            scenario_bank_fingerprint(args.scenario_bank) if args.scenario_bank is not None else {}
+        )
         planners = PLANNER_NAMES if "all" in args.planner else tuple(dict.fromkeys(args.planner))
         policies = REPLAN_POLICIES if "all" in args.policy else tuple(dict.fromkeys(args.policy))
         if args.control_hz <= 0:
@@ -1559,21 +2441,59 @@ def main(argv: Sequence[str] | None = None) -> int:
             periodic_reroute_frames=args.periodic_frames,
             planning_clearance_mm=None if args.clearance_mm is None else args.clearance_mm[0],
             time_scale=args.time_scale,
+            no_route_limit_ms=args.no_route_limit_ms or None,
+            slow_call_limit_ms=args.slow_call_limit_ms or None,
         )
+        if args.result_set in RESULT_SET_OVERRIDES:
+            config = replace(config, **RESULT_SET_OVERRIDES[args.result_set])
         output_folder = args.output_dir or _default_output_folder()
         if output_folder.exists() and any(output_folder.iterdir()):
             raise ValueError("Output directory must be new or empty to preserve previous results")
-        scenario_folder = output_folder / "scenarios"
-        scenario_folder.mkdir(parents=True, exist_ok=True)
-        for scenario in scenarios:
-            (scenario_folder / f"{scenario.name}.json").write_text(
-                json.dumps(scenario.to_dict(), indent=2), encoding="utf-8"
+        if args.result_set == ONE_SHOT_RESULT_SET:
+            print(
+                f"One-shot validation: {len(scenarios)} scenarios x {len(planners)} planners, "
+                "single process",
+                flush=True,
             )
+            rows = [
+                row
+                for scenario in scenarios
+                for planner_name in planners
+                for row in validate_one_shot(
+                    scenario,
+                    planner_name,
+                    seed=args.seed,
+                    clearance_mm=None if args.clearance_mm is None else args.clearance_mm[0],
+                )
+            ]
+            write_one_shot_results(rows, output_folder, extra_manifest=bank_manifest)
+            for summary in summarize_one_shot(rows):
+                print(
+                    "{planner}: routes {robot_routes_label} robots, "
+                    "{scenarios_all_routes_label} scenarios; "
+                    "total {total_ms_mean:.2f} ms mean / {total_ms_p95:.2f} ms p95".format(
+                        **summary
+                    )
+                )
+            return 0
+        output_folder.mkdir(parents=True, exist_ok=True)
+        if args.scenario_bank is None:
+            # Generated or loose scenarios: keep a copy so the batch is reproducible.
+            # A frozen bank is not copied; the manifest records its path, file
+            # count and SHA-256 fingerprint instead.
+            scenario_folder = output_folder / "scenarios"
+            scenario_folder.mkdir(parents=True, exist_ok=True)
+            for scenario in scenarios:
+                (scenario_folder / f"{scenario.name}.json").write_text(
+                    json.dumps(scenario.to_dict(), indent=2), encoding="utf-8"
+                )
         if any(h < 0 for h in args.predict_ms):
             raise ValueError("--predict-ms must be non-negative")
         periods = args.replan_ms or [1000.0 / args.control_hz]
         total = (
-            len(scenarios)
+            len(scenarios) * len(planners) * len(RESULT_SETS[args.result_set]) * args.trials
+            if args.result_set
+            else len(scenarios)
             * len(planners)
             * len(policies)
             * len(args.predict_ms)
@@ -1583,7 +2503,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(
             f"Running up to {total} runs: {len(scenarios)} scenarios x {len(planners)} planners"
-            f" x {len(policies)} policies x {args.trials} trials on {workers} worker(s)"
+            + (
+                f" x {len(RESULT_SETS[args.result_set])} arms ({args.result_set})"
+                if args.result_set
+                else f" x {len(policies)} policies"
+            )
+            + f" x {args.trials} trials on {workers} worker(s)"
             f" at {f'{args.time_scale}x cap' if args.time_scale else 'maximum speed'}",
             flush=True,
         )
@@ -1603,6 +2528,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             predictions_ms=args.predict_ms,
             replan_periods_ms=args.replan_ms,
             clearances_mm=args.clearance_mm,
+            arms=RESULT_SETS.get(args.result_set) if args.result_set else None,
         )
         write_results(
             results,
@@ -1617,6 +2543,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "saved_included": not args.no_saved,
                 "control_hz": args.control_hz,
                 "replan_periods_ms_requested": periods,
+                "result_set": args.result_set,
+                "arms": [list(arm) for arm in RESULT_SETS.get(args.result_set, ())]
+                if args.result_set
+                else None,
+                "result_set_overrides": RESULT_SET_OVERRIDES.get(args.result_set),
+                **bank_manifest,
             },
         )
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
@@ -1628,20 +2560,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Physics validation passed: "
             f"{sum(r.physics_validation_passed for r in results)}/{len(results)}"
         )
-    for summary in summarize_results(results):
+    for summary in summarize_outcomes(results):
         print(
-            "{} / {} / {} @ {:g} ms: {:.0%} complete, {:.0%} collision-free, {:.1f} replans, "
-            "{:.1f} ms planning/run (median), {:.0f}x real time".format(
-                summary["scenario"],
-                summary["planner"],
-                summary["replan_policy"],
-                summary["replan_period_ms"],
-                summary["completion_rate"],
-                summary["collision_free_rate"],
-                summary["replans_mean"],
-                summary["planning_time_ms_median"],
-                summary["realtime_factor_mean"],
-            )
+            "{scenario_set} / {planner} / {replan_policy} @ {replan_period_ms:g} ms, "
+            "h {prediction_horizon_ms:g} ms: completed {completed_label}, strict {strict_label}, "
+            "buffer-only {buffer_only_label}, physical {physical_label}".format(**summary)
         )
     print(f"Results: {output_folder.resolve()}")
     for result in results:

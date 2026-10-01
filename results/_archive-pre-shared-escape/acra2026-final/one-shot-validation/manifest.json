@@ -1,0 +1,13 @@
+{
+  "generated_at": "2026-09-30T14:50:19.434939+00:00",
+  "engine": "research_sdk.headless",
+  "result_set": "one-shot-validation",
+  "model": "frozen obstacles at initial positions, other robots at their starts, prediction 0 ms, one initial route request per robot, no execution",
+  "timing": "wall clock, single process; search_ms is time inside the shared networkx Dijkstra call, map_ms is the rest of the planning call",
+  "robot_calls": 3600,
+  "code_revision": "ca7f2e03e0cb14aa143966fcd3e57f6d791033d2",
+  "code_dirty": true,
+  "scenario_bank": "scenarios/acra2026-200",
+  "scenario_bank_files": 200,
+  "scenario_bank_sha256": "9683fc75c93367d73bb19a719ffe0f468c937862a27861f148692c9a5339e6c3"
+}

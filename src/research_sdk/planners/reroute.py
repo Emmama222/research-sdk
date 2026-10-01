@@ -11,11 +11,20 @@ gate so all three planners can share it.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from math import hypot
 from typing import Protocol
 
-from research_sdk.config import VORONOI_TARGET_DEAD_ZONE_MM
+from research_sdk.config import (
+    FIELD_X_MAX,
+    FIELD_X_MIN,
+    FIELD_Y_MAX,
+    FIELD_Y_MIN,
+    VORONOI_ESCAPE_MARGIN_MM,
+    VORONOI_MIN_ESCAPE_STEP_MM,
+    VORONOI_TARGET_DEAD_ZONE_MM,
+)
 
 Point2D = tuple[float, float]
 Pose2D = tuple[float, float, float]
@@ -112,6 +121,48 @@ def evaluate_route(
         target_moved or route_finished or active_route_blocked or periodic_due
     )
     return RerouteDecision(need_reroute=need_reroute, is_path_free=is_free, active_target=active_target)
+
+
+def escape_waypoint(
+    start: Point2D,
+    target: Point2D,
+    zones: Iterable[tuple[Point2D, float]],
+) -> Point2D | None:
+    """Step out of every obstacle zone that contains ``start``; ``None`` if none does.
+
+    Shared by all three planners (ACRA 2026 fairness fix, 1 Oct): each planner
+    passes its own inflated obstacle zones (centre, radius), i.e. exactly the
+    region inside which it would otherwise refuse to plan from ``start``. The
+    push direction is the overlap-weighted sum of "away from centre" vectors;
+    the step is ``max(min_step, max_overlap + margin)``, clamped to the field.
+    Originally the Voronoi planner's private escape step; moved here so PRM
+    and the visibility graph get the same behaviour.
+    """
+    push_x = push_y = max_overlap = 0.0
+    for (cx, cy), radius in zones:
+        dx, dy = start[0] - cx, start[1] - cy
+        dist = hypot(dx, dy)
+        overlap = radius - dist
+        if overlap < 0.0:
+            continue
+        if dist <= 1e-6:
+            dx, dy = target[0] - cx, target[1] - cy
+            dist = hypot(dx, dy)
+        if dist <= 1e-6:
+            dx, dy, dist = 1.0, 0.0, 1.0
+        weight = max(overlap, 1.0)
+        push_x += (dx / dist) * weight
+        push_y += (dy / dist) * weight
+        max_overlap = max(max_overlap, overlap)
+    push_len = hypot(push_x, push_y)
+    if push_len <= 1e-6:
+        return None
+    step = max(float(VORONOI_MIN_ESCAPE_STEP_MM), max_overlap + float(VORONOI_ESCAPE_MARGIN_MM))
+    m = float(VORONOI_TARGET_DEAD_ZONE_MM)
+    return (
+        max(float(FIELD_X_MIN) + m, min(float(FIELD_X_MAX) - m, start[0] + push_x / push_len * step)),
+        max(float(FIELD_Y_MIN) + m, min(float(FIELD_Y_MAX) - m, start[1] + push_y / push_len * step)),
+    )
 
 
 def commit_reroute(

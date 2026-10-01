@@ -14,8 +14,31 @@ research results:
 
     research-sdk-headless scenarios/crowded.json --planner all --trials 10
 
+With no input, every JSON file directly in `scenarios/` is run
+(`crowded`, `dynamic2`, `snapshot_…` and the dated UI scenarios).
+
 See [docs/headless.md](docs/headless.md) for the simulation model, metrics,
 batch options, and Python API.
+
+## Running the ACRA 2026 scenarios
+
+The 200 frozen evaluation scenarios live in `scenarios/acra2026-200/`
+(previews in `scenario_png/`). Run the three result sets from the repository
+root; each one uses exactly those 200 scenarios and refuses to start otherwise:
+
+```powershell
+python -m research_sdk.headless --result-set one-shot-validation --output-dir results/acra2026-final/one-shot-validation
+python -m research_sdk.headless --result-set policy-comparison --workers 1 --output-dir results/acra2026-final/policy-comparison
+python -m research_sdk.headless --result-set horizon-sweep --workers 1 --output-dir results/acra2026-final/horizon-sweep
+python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
+```
+
+The one-shot set takes well under a minute. The two dynamic sets use one
+worker so the wall-clock latency numbers are clean. The tables are written to
+`results/acra2026-final/tables/`. Arms, metrics and failure rules are described
+under "ACRA 2026 result sets" in [docs/headless.md](docs/headless.md);
+`results/README.md` explains the results layout.
 
 For native grSim/ODE physics validation, see [docs/physics.md](docs/physics.md).
 After building the engine in WSL, run from PowerShell:

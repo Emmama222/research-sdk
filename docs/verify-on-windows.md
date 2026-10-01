@@ -59,8 +59,8 @@ on this branch, so anything left there will show up in `git status`.
 ## 3. The committed tables regenerate from the committed data
 
 ```powershell
-& $py scripts\analyse_matrix.py results\acra-matrix-clr30
-git diff --ignore-cr-at-eol --stat -- results/acra-matrix-clr30/analysis/*.tex
+& $py scripts\analyse_matrix.py results\_archive-pre-dec016\acra-matrix-clr30
+git diff --ignore-cr-at-eol --stat -- results/_archive-pre-dec016/acra-matrix-clr30/analysis/*.tex
 ```
 
 Expected: the `.tex` tables show no content change. The `.csv` and
@@ -79,5 +79,7 @@ stamp. With `RESEARCH_RUN_PHYSICS=1` and `RESEARCH_GRSIM_BIN` pointing at
 reports `17 passed` (the three native tests included, 10 s) on 19 September
 2026. `scripts/physics.ps1` remains the route for a build living in WSL.
 
-`analyse_canonical.py` cannot run on any `acra-*` batch on any platform until
-`acra-6v6-patrol` is re-run with the current runner; see `results/README.md`.
+Pre-DEC-016 batches now live in `results/_archive-pre-dec016/` (see its
+`README.md`); `analyse_canonical.py` runs only on the archived
+`acra-6v6-patrol-rerun`. Final ACRA results are produced with `--result-set`;
+see "ACRA 2026 result sets" in `docs/headless.md`.
