@@ -334,8 +334,13 @@ def figure_policy_outcomes(policy: pd.DataFrame | None, out: Path) -> None:
     v_c, v_e = _row(policy, "visibility", "cycle", 20.0), _row(policy, "visibility", "event", 20.0)
     lead = ("Event triggering finishes as many runs as cycling or more"
             if event_ok else "Run outcomes by planner and policy")
-    title = (f"{lead} (Visibility Graph at 20 ms: {int(v_c['completed'])} vs "
-             f"{int(v_e['completed'])} of 200), but touches obstacles about as often")
+    lo, hi = int(policy["completed"].min()), int(policy["completed"].max())
+    if hi - lo <= 5:
+        title = (f"{lead} (every arm finishes {lo}–{hi} of 200) and touches obstacles about as often, "
+                 f"with far fewer rebuilds")
+    else:
+        title = (f"{lead} (Visibility Graph at 20 ms: {int(v_c['completed'])} vs "
+                 f"{int(v_e['completed'])} of 200), but touches obstacles about as often")
     subtitle = ("Each bar is the same 200 scenarios. Cycle rebuilds the route at every check; "
                 "event (ours) rebuilds only when the route ahead is blocked.")
     _outcome_figure(rows, lambda r: _arm_label(r["replan_policy"], r["replan_period_ms"]),
@@ -570,10 +575,17 @@ def figure_horizon(policy, sweep, out: Path) -> None:
         sel = rows[(rows.planner == p) & (rows.prediction_horizon_ms == h)]
         return scale * float(sel.iloc[0][col]) if len(sel) else float("nan")
 
-    title = (f"Prediction trades computing for safety only for Voronoi: clean finishes "
-             f"{val('voronoi', first, 'strict_rate'):.0f}% → {val('voronoi', last, 'strict_rate'):.0f}%, "
-             f"replans {val('voronoi', first, 'replans_per_run', 1):.0f} → "
-             f"{val('voronoi', last, 'replans_per_run', 1):.0f} per run")
+    gains = {p: val(p, last, "strict_rate") - val(p, first, "strict_rate") for p in PLANNERS}
+    clean = ", ".join(
+        f"{PLANNER_LABEL[p]} {val(p, first, 'strict_rate'):.0f}% → {val(p, last, 'strict_rate'):.0f}%"
+        for p in PLANNERS)
+    if all(g > 0 for g in gains.values()):
+        title = (f"Prediction raises clean finishes for every planner ({clean}, {first:g} → {last:g} ms) "
+                 f"at the cost of more replans for Voronoi "
+                 f"({val('voronoi', first, 'replans_per_run', 1):.0f} → "
+                 f"{val('voronoi', last, 'replans_per_run', 1):.0f} per run)")
+    else:
+        title = (f"Prediction changes clean finishes by planner ({clean}, {first:g} → {last:g} ms)")
     subtitle = ("Horizon = how far ahead (ms) obstacles are projected; 0 = no prediction. "
                 "Event trigger, 20 ms checks, 200 scenarios per point.")
     fig, axes = plt.subplots(2, 2, figsize=(7.2, 6.0))
@@ -711,12 +723,21 @@ def table_event_route(policy_runs, ablation_runs, calls, ablation_calls, out: Pa
     slow = {pol: int(t[t.replan_policy == pol].dnf_slow.sum()) for pol, _ in arms}
     route = {pol: int(t[t.replan_policy == pol].dnf_route.sum()) for pol, _ in arms}
     vis = [get("visibility", 20.0, pol, "rebuilds") for pol in ("event", "event_route", "cycle")]
-    finding = (f"Rebuilding more often costs more and finishes fewer runs: at 20 ms checks Visibility Graph "
-               f"rebuilds {vis[0]:.1f} (event), {vis[1]:.1f} (full-path) and {vis[2]:.1f} (cycle) times per run. "
-               f"Across all planners, failed runs from a rebuild over 100 ms (computing time): event {slow['event']}, "
-               f"full-path {slow['event_route']}, cycle {slow['cycle']}; failed runs because no route existed for "
-               f"1 s (obstacles blocked every path): {route['event']}, {route['event_route']}, "
-               f"{route['cycle']}")
+    fin_lo, fin_hi = int(t.finished.min()), int(t.finished.max())
+    lead = (f"Rebuilding more often costs more planning time without finishing more runs (every arm "
+            f"finishes {fin_lo}–{fin_hi} of 200)" if fin_hi - fin_lo <= 5 else
+            "Rebuilding more often costs more and finishes fewer runs")
+    if sum(slow.values()) == 0:
+        fails = (f"No rebuild took over 100 ms, so no run failed on computing time; the runs that failed had "
+                 f"no route for 1 s (obstacles blocked every path): event {route['event']}, full-path "
+                 f"{route['event_route']}, cycle {route['cycle']}")
+    else:
+        fails = (f"Across all planners, failed runs from a rebuild over 100 ms (computing time): event "
+                 f"{slow['event']}, full-path {slow['event_route']}, cycle {slow['cycle']}; failed runs because "
+                 f"no route existed for 1 s (obstacles blocked every path): {route['event']}, "
+                 f"{route['event_route']}, {route['cycle']}")
+    finding = (f"{lead}: at 20 ms checks Visibility Graph rebuilds {vis[0]:.1f} (event), {vis[1]:.1f} "
+               f"(full-path) and {vis[2]:.1f} (cycle) times per run. {fails}")
     subtitle = (f"{finding}. Event (ours) rebuilds when the next segment is blocked; full-path also when any "
                 "later segment is (Costa and Tonidandel 2024); cycle rebuilds at every check. Brackets show the "
                 "change from event. In each group of three, \u25b2 blue (bold) marks the best value and "
@@ -840,10 +861,18 @@ def table_rebuild_latency(calls, policy_runs, out: Path) -> None:
     stops = ", ".join(
         f"{PLANNER_LABEL[p]} {cell(p, 20.0, 'cycle', 'stops'):.0f} vs {cell(p, 20.0, 'event', 'stops'):.0f}"
         for p in PLANNERS)
-    subtitle = (f"A typical rebuild is far below the 100 ms limit (95 % of rebuilds finish within {p95_lo:.0f}–{p95_hi:.0f} ms), "
-                f"and rebuilds over 100 ms are rare (at most {rate_hi:.0f} per 10,000). Each rebuild is a new "
+    ratios = [cell(p, 20.0, "cycle", "per_run") / max(cell(p, 20.0, "event", "per_run"), 1e-9) for p in PLANNERS]
+    if t.stops.sum() == 0:
+        tail = (f"No rebuild exceeded the 100 ms limit (slowest {t['max'].max():.0f} ms), so no robot was "
+                f"stopped; event triggering still needs {min(ratios):.0f}–{max(ratios):.0f}× fewer rebuilds "
+                f"than cycling at 20 ms checks. ")
+    else:
+        tail = (f"Rebuilds over 100 ms are rare (at most {rate_hi:.0f} per 10,000). Each rebuild is a new "
                 f"chance of one, so rebuilding less often stops fewer robots: at 20 ms checks, cycle vs event "
-                f"{stops}. Rebuild time is mostly map construction; the Dijkstra search is a few percent. "
+                f"{stops}. ")
+    subtitle = (f"A typical rebuild is far below the 100 ms limit (95 % of rebuilds finish within "
+                f"{p95_lo:.0f}–{p95_hi:.0f} ms). {tail}Rebuild time is mostly map construction; the Dijkstra "
+                f"search is a few percent. "
                 "Times are wall clock on one machine, successful rebuilds only. \u25b2 blue (bold) = better of the "
                 "pair, \u25bc orange = worse; times marked only when they differ by 10 % or more.")
 
