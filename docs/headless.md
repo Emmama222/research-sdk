@@ -216,10 +216,18 @@ python scripts/plot_outcomes.py
 Use `--workers 1` on one named machine for the dynamic sets: the replan time
 limit and all latency columns are wall-clock measurements.
 `build_result_tables.py` writes the three paper tables as CSV and Markdown to
-`results/acra2026-final/tables/`; `plot_outcomes.py` writes five figures (PDF
-and PNG) to `results/acra2026-final/figures/`: outcome breakdown, compute vs
-safety, one-shot planning time, rebuild latency distribution and route
-lifetime.
+`results/acra2026-final/tables/`; `plot_outcomes.py` writes the figures (PDF
+and PNG) to `results/acra2026-final/figures/`; `figures/README.md` there
+indexes what each one compares and how to read it.
+
+One supporting set is part of the paper: `event-route-ablation` (full-path
+recalculation, policy key `event_route`,
+at 20 and 100 ms, 1,200 runs, written to
+`results/acra2026-final/supporting/event-route-ablation/`). It is the DEC-010
+ablation compared against the policy comparison's event arms. Two further
+sets, `horizon-150-check` and `no-route-500-check`, are optional and were not
+run; see `results/README.md`. Decision ids used in this document are
+summarised in [decisions/0006-acra2026-evaluation-rules.md](decisions/0006-acra2026-evaluation-rules.md).
 
 ### Scenario bank rules
 

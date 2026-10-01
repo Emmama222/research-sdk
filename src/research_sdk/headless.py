@@ -90,6 +90,18 @@ RESULT_SETS: dict[str, tuple[tuple[str, float, float], ...]] = {
         ("event", 50.0, 20.0),
         ("event", 100.0, 20.0),
     ),
+    # Supporting sets (DEC-010 ablation, DEC-019/020 evidence); compare each with
+    # the matching arms of the main sets rather than reading it on its own.
+    "event-route-ablation": (
+        ("event_route", 0.0, 20.0),
+        ("event_route", 0.0, 100.0),
+    ),
+    "horizon-150-check": (("event", 150.0, 20.0),),
+    "no-route-500-check": (("event", 0.0, 20.0),),
+}
+# Result sets that change a configuration value as well as the arms.
+RESULT_SET_OVERRIDES: dict[str, dict[str, float]] = {
+    "no-route-500-check": {"no_route_limit_ms": 500.0},
 }
 TIME_SCALE_CHOICES = (1, 10, 100, 200, 500)
 _PACING_INTERVAL_WALL_S = 0.01
@@ -1713,6 +1725,11 @@ def summarize_outcomes(
                 "buffer_only_label": f"{buffer_only}/{completed}",
                 "physical_label": f"{physical}/{completed}",
                 "incomplete_label": f"{incomplete}/{n}",
+                "collision_free_completed": strict + buffer_only,
+                "collision_free_completed_label": f"{strict + buffer_only}/{n}",
+                # Comparison metric (DEC-021): completed with no physical contact,
+                # out of all valid runs. Buffer entries count as collision-free.
+                "collision_free_completion_rate": _rate(strict + buffer_only, n),
                 "completion_rate": _rate(completed, n),
                 "strict_rate": _rate(strict, completed),
                 "buffer_only_rate": _rate(buffer_only, completed),
@@ -2407,6 +2424,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             no_route_limit_ms=args.no_route_limit_ms or None,
             slow_call_limit_ms=args.slow_call_limit_ms or None,
         )
+        if args.result_set in RESULT_SET_OVERRIDES:
+            config = replace(config, **RESULT_SET_OVERRIDES[args.result_set])
         output_folder = args.output_dir or _default_output_folder()
         if output_folder.exists() and any(output_folder.iterdir()):
             raise ValueError("Output directory must be new or empty to preserve previous results")
@@ -2508,6 +2527,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "arms": [list(arm) for arm in RESULT_SETS.get(args.result_set, ())]
                 if args.result_set
                 else None,
+                "result_set_overrides": RESULT_SET_OVERRIDES.get(args.result_set),
                 **bank_manifest,
             },
         )

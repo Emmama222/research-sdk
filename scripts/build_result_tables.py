@@ -1,4 +1,4 @@
-"""Build the three ACRA 2026 result tables from results/acra2026-final/.
+"""Build the ACRA 2026 result tables from results/acra2026-final/.
 
 Reads each result set's summary.csv (written by ``research_sdk.headless
 --result-set ...``) and writes CSV and Markdown tables to ``<root>/tables/``:
@@ -7,6 +7,9 @@ Reads each result set's summary.csv (written by ``research_sdk.headless
 * policy_comparison    -- Dynamic Replanning Policy Comparison, planner x arm
 * horizon_sweep        -- Prediction Horizon Sweep, planner x horizon; the 0 ms
                           row is the policy comparison's event @ 20 ms arm
+* event_route_ablation -- Supporting: event vs full-path (event_route) at 20 and 100 ms
+                          (written only when supporting/event-route-ablation
+                          exists)
 
 Every count keeps its denominator (e.g. ``174/200``); per-run values are means
 over the valid runs of the 200-scenario bank.
@@ -23,6 +26,9 @@ from pathlib import Path
 
 PLANNER_ORDER = {"voronoi": 0, "prm": 1, "visibility": 2}
 PLANNER_LABEL = {"voronoi": "Voronoi", "prm": "PRM", "visibility": "Visibility Graph"}
+# event_route is shown as "Full-path": recalculate when any part of the route is blocked
+# (Costa and Tonidandel, RoboCup 2023, LNAI 14140, 2024).
+ARM_LABEL = {"event": "Event (ours)", "event_route": "Full-path", "cycle": "Cycle"}
 
 
 def _read(path: Path) -> list[dict[str, str]]:
@@ -69,6 +75,7 @@ def one_shot_table(rows: list[dict[str, str]]) -> tuple[list[str], list[list[str
 
 
 DYNAMIC_HEADER = [
+    "Collision-free finishes /200",
     "Completed", "Strict /C", "Buffer-only /C", "Physical /C", "RR contacts /F",
     "RO contacts /F", "Contacts /F", "Episodes failed (no route)",
     "Robots stopped (replan >100 ms)",
@@ -79,8 +86,15 @@ DYNAMIC_HEADER = [
 ]
 
 
+def _collision_free(r: dict[str, str]) -> str:
+    if r.get("collision_free_completed_label"):
+        return r["collision_free_completed_label"]
+    return f"{int(r['strict']) + int(r['buffer_only'])}/{r['valid_runs']}"
+
+
 def _dynamic_cells(r: dict[str, str]) -> list[str]:
     return [
+        _collision_free(r),
         r["completed_label"], r["strict_label"], r["buffer_only_label"], r["physical_label"],
         _num(r["rr_contacts_per_failed_run"], 2), _num(r["ro_contacts_per_failed_run"], 2),
         _num(r["contacts_per_failed_run"], 2),
@@ -127,6 +141,22 @@ def horizon_table(
     return ["Planner", "Horizon (event @ 20 ms)", *DYNAMIC_HEADER], body
 
 
+def ablation_table(
+    ablation: list[dict[str, str]], policy: list[dict[str, str]]
+) -> tuple[list[str], list[list[str]]]:
+    rows = [r for r in policy if r["replan_policy"] == "event"] + ablation
+
+    def key(r):
+        return (PLANNER_ORDER.get(r["planner"], 9), float(r["replan_period_ms"]), r["replan_policy"])
+
+    body = [
+        [_planner(r), f"{ARM_LABEL.get(r['replan_policy'], r['replan_policy'])} @ {float(r['replan_period_ms']):g} ms",
+         *_dynamic_cells(r)]
+        for r in sorted(rows, key=key)
+    ]
+    return ["Planner", "Arm", *DYNAMIC_HEADER], body
+
+
 def _write(folder: Path, name: str, header: list[str], body: list[list[str]]) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     with (folder / f"{name}.csv").open("w", newline="", encoding="utf-8") as stream:
@@ -142,12 +172,13 @@ def _write(folder: Path, name: str, header: list[str], body: list[list[str]]) ->
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Build the three ACRA 2026 result tables.")
+    parser = argparse.ArgumentParser(description="Build the ACRA 2026 result tables.")
     parser.add_argument("root", type=Path, nargs="?", default=Path("results/acra2026-final"))
     args = parser.parse_args()
     one_shot = _read(args.root / "one-shot-validation" / "summary.csv")
     policy = _read(args.root / "policy-comparison" / "summary.csv")
     sweep = _read(args.root / "horizon-sweep" / "summary.csv")
+    ablation = _read(args.root / "supporting" / "event-route-ablation" / "summary.csv")
     out = args.root / "tables"
     written = []
     if one_shot:
@@ -159,6 +190,9 @@ def main() -> int:
     if sweep or policy:
         _write(out, "horizon_sweep", *horizon_table(sweep, policy))
         written.append("horizon_sweep")
+    if ablation and policy:
+        _write(out, "event_route_ablation", *ablation_table(ablation, policy))
+        written.append("event_route_ablation")
     print(f"Wrote {', '.join(written) or 'nothing (no summaries found)'} to {out}")
     return 0
 

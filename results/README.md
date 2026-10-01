@@ -16,6 +16,10 @@ Ad-hoc headless runs without `--output-dir` are written to `results/headless/<ti
 | Dynamic Replanning Policy Comparison | `policy-comparison/` | Cycle and event at 20 ms and 100 ms checks, horizon 0 ms | 2,400 |
 | Prediction Horizon Sweep | `horizon-sweep/` | Event at 20 ms checks, horizon 20 / 50 / 100 ms (0 ms point reused from the policy comparison) | 1,800 |
 
+Figures and tables live in `acra2026-final/figures/` and `acra2026-final/tables/`;
+[`acra2026-final/figures/README.md`](acra2026-final/figures/README.md) indexes
+what each figure shows and how to read it.
+
 Each folder is written once and never overwritten. A re-run goes into a new,
 dated folder and the superseded one moves to the archive.
 
@@ -40,3 +44,24 @@ python scripts/plot_outcomes.py
 Tables are written to `results/acra2026-final/tables/` as CSV and Markdown.
 Failure rules (DEC-019): a post-initial replan over 100 ms stops that robot;
 any robot without a route for 1000 ms fails the episode.
+
+## Supporting result sets
+
+Run on the same machine and settings as the main sets (single worker), then re-run the scripts:
+
+```powershell
+python -m research_sdk.headless --result-set event-route-ablation --workers 1 --output-dir results/acra2026-final/supporting/event-route-ablation
+python scripts/build_result_tables.py
+python scripts/plot_outcomes.py
+```
+
+| Set | Arms | Runs | Status | Purpose |
+|---|---|---:|---|---|
+| `event-route-ablation` | Full-path recalculation (`event_route`) @ 20 and 100 ms | 1,200 | **Done** (`supporting/event-route-ablation/`) | DEC-010 ablation against the policy comparison's event arms |
+| `horizon-150-check` | event @ 20 ms, horizon 150 ms | 600 | Optional, not run | Full-bank repeat of the 20-scenario preview behind DEC-020 |
+| `no-route-500-check` | event @ 20 ms, no-route limit 500 ms | 600 | Optional, not run | Full-bank repeat of the 20-scenario preview behind the DEC-019 amendment |
+
+The two optional sets can be run the same way (`--result-set horizon-150-check`
+or `--result-set no-route-500-check`); the plotting script draws their figures
+only when their results exist. Decision ids are summarised in
+[`docs/decisions/0006-acra2026-evaluation-rules.md`](../docs/decisions/0006-acra2026-evaluation-rules.md).

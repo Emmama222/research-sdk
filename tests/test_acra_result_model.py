@@ -460,3 +460,38 @@ def test_failed_replans_are_counted_but_kept_out_of_latency(monkeypatch) -> None
     (row,) = summarize_outcomes([result])
     assert row["replan_ms_mean"] is None
     assert row["failed_replan_share"] == 1.0
+
+
+def test_supporting_result_sets_and_overrides() -> None:
+    assert headless.RESULT_SETS["event-route-ablation"] == (
+        ("event_route", 0.0, 20.0),
+        ("event_route", 0.0, 100.0),
+    )
+    assert headless.RESULT_SETS["horizon-150-check"] == (("event", 150.0, 20.0),)
+    assert headless.RESULT_SET_OVERRIDES["no-route-500-check"] == {"no_route_limit_ms": 500.0}
+
+
+def test_no_route_500_check_runs_with_the_500_ms_limit(tmp_path) -> None:
+    _write_bank(tmp_path / "bank", ["a"])
+    out = tmp_path / "out"
+    code = headless.main(
+        ["--result-set", "no-route-500-check", "--scenario-bank", str(tmp_path / "bank"),
+         "--planner", "visibility", "--output-dir", str(out)]
+    )
+    assert code == 0
+    manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["config"]["no_route_limit_ms"] == 500.0
+    assert manifest["result_set_overrides"] == {"no_route_limit_ms": 500.0}
+
+
+def test_collision_free_completion_counts_strict_and_buffer_only() -> None:
+    base = replace(simulate(_straight(), "visibility"), scenario_set="bank")
+    runs = [
+        replace(base, scenario="s1", outcome="S"),
+        replace(base, scenario="s2", outcome="B"),
+        replace(base, scenario="s3", outcome="P"),
+        replace(base, scenario="s4", outcome="I", completed=False),
+    ]
+    (row,) = summarize_outcomes(runs)
+    assert row["collision_free_completed_label"] == "2/4"
+    assert row["collision_free_completion_rate"] == 0.5
